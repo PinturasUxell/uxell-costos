@@ -673,7 +673,7 @@ let mesProd = mesActual();
 VISTAS.produccion = async app => {
   app.innerHTML = `<h1>Producción</h1>
     <div class="bar"><input type="month" id="mes" value="${mesProd}" style="max-width:180px"><input class="grow" id="q" placeholder="Buscar producto, nº, lote…">
-    ${can('produccion') ? '<button class="btn" id="nueva">+ Nueva partida</button>' : ''}<button class="btn sec" onclick="window.print()">Imprimir</button></div>
+    ${can('produccion') ? '<button class="btn" id="nueva">+ Nueva partida</button>' : ''}<button class="btn sec" id="xlsMes">⬇ Excel del mes</button><button class="btn sec" onclick="window.print()">Imprimir</button></div>
     <div class="printhead"><b>Uxell · Partidas fabricadas ${mesProd}</b></div>
     <div id="kp" class="grid" style="margin-bottom:10px"></div>
     <div class="card"><div class="tw" id="tabla"></div></div>`;
@@ -699,6 +699,7 @@ VISTAS.produccion = async app => {
   };
   $('#mes', app).onchange = draw; $('#q', app).oninput = draw;
   const n = $('#nueva', app); if (n) n.onclick = () => editorPartida(null);
+  $('#xlsMes', app).onclick = () => guard(() => excelProduccionMes($('#mes', app).value || mesActual()));
   VISTAS._reloadProd = draw;
   await draw();
 };
@@ -1180,6 +1181,95 @@ INF.precio = async el => {
   $('#desde', el).onchange = draw; await draw();
 };
 
+
+// =====================================================================
+//  EXCEL MENSUAL DE PRODUCCIÓN: resumen + una solapa por partida + detalle
+// =====================================================================
+async function excelProduccionMes(mes){
+  toast('Armando el Excel de ' + mes + '…');
+  const [y, m] = mes.split('-').map(Number); const fin = new Date(y, m, 1).toISOString().slice(0,10);
+  const parts = await fetchAll(() => sb.from('v_partidas_full').select('*').gte('fecha', mes + '-01').lt('fecha', fin).order('nro'));
+  if (!parts.length) throw new Error('No hay partidas en ' + mes);
+  const ids = parts.map(p => p.id);
+  let ins = [], env = [];
+  for (let i = 0; i < ids.length; i += 150) {
+    const sub = ids.slice(i, i + 150);
+    ins = ins.concat(await fetchAll(() => sb.from('partida_insumos').select('*').in('partida_id', sub).order('orden')));
+    env = env.concat(await fetchAll(() => sb.from('partida_envases').select('*').in('partida_id', sub)));
+  }
+  const I = id => S.itemById[id] || { codigo:'?', nombre:'?', unidad:'' };
+  const r = (v, d=4) => v == null || isNaN(v) ? null : Math.round(Number(v) * 10**d) / 10**d;
+  const nombreMes = new Date(y, m-1, 1).toLocaleDateString('es-AR', { month:'long', year:'numeric' }).toUpperCase();
+  const wb = XLSX.utils.book_new();
+  const hoja = (aoa, cols, nombre) => { const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = cols.map(w => ({ wch: w })); XLSX.utils.book_append_sheet(wb, ws, nombre.slice(0,31)); };
+
+  // ---- Resumen
+  const R = [[`ÜXELL — PARTIDAS FABRICADAS ${nombreMes}`], [`Generado el ${fd(hoy())} · costos en U$S y en pesos al dólar de cada partida`], [],
+    ['Nº partida','Fecha','Lote','Código','Producto','Tipo','Cant. teórica','Litros producidos','Rendimiento %','Insumos U$S','Merma U$S','Energía + accesorios U$S','Envases U$S','Costo total U$S',
+     '① Granel U$S/lt','② Con envase U$S/lt','③ Con gastos del mes U$S/lt','Dólar','① Granel $/lt','② Con envase $/lt','Estado','Observaciones']];
+  const tot = { teor:0, lt:0, ins:0, merma:0, extra:0, env:0 };
+  parts.forEach(p => {
+    const extra = Number(p.energia_usd||0) + Number(p.accesorios_usd||0);
+    const total = Number(p.costo_insumos_usd||0) + Number(p.costo_merma_usd||0) + extra + Number(p.costo_envases_usd||0);
+    tot.teor += Number(p.cant_teorica||0); tot.lt += Number(p.litros_producidos||0); tot.ins += Number(p.costo_insumos_usd||0);
+    tot.merma += Number(p.costo_merma_usd||0); tot.extra += extra; tot.env += Number(p.costo_envases_usd||0);
+    R.push([p.nro, p.fecha, p.lote || '', p.producto_codigo, p.producto_nombre, p.producto_tipo === 'interno' ? 'Uso interno' : 'Producto',
+      r(p.cant_teorica,2), r(p.litros_producidos,2), p.cant_teorica ? r(p.litros_producidos / p.cant_teorica * 100, 1) : null,
+      r(p.costo_insumos_usd,2), r(p.costo_merma_usd,2), r(extra,2), r(p.costo_envases_usd,2), r(total,2),
+      r(p.costo_granel_lt_usd), r(p.costo_envasado_lt_usd), r(p.costo_total_lt_usd), r(p.cotizacion,2),
+      p.cotizacion ? r(p.costo_granel_lt_usd * p.cotizacion, 2) : null, p.cotizacion && p.costo_envasado_lt_usd ? r(p.costo_envasado_lt_usd * p.cotizacion, 2) : null,
+      p.estado === 'cerrada' ? 'Cerrada' : 'Borrador',
+      [p.litros_estimados ? 'Sin litros reales en la planilla (se usó la teórica)' : '', p.litros_perdidos > 0 ? `Pérdida ${p.litros_perdidos} lt: ${p.motivo_perdida||''}` : '', p.origen === 'historica' ? 'Sin detalle de insumos' : ''].filter(Boolean).join(' · ')]);
+  });
+  R.push([], ['TOTAL DEL MES','','','','','', r(tot.teor,2), r(tot.lt,2), tot.teor ? r(tot.lt/tot.teor*100,1) : null, r(tot.ins,2), r(tot.merma,2), r(tot.extra,2), r(tot.env,2), r(tot.ins+tot.merma+tot.extra+tot.env,2)]);
+  hoja(R, [9,11,10,9,34,11,11,12,10,12,10,12,11,12,12,12,14,9,12,12,9,40], 'Resumen');
+
+  // ---- Consumo de materias primas del mes
+  const cons = {};
+  ins.forEach(l => { const k = l.insumo_id; cons[k] = cons[k] || { q:0, usd:0, n:0 }; cons[k].q += Number(l.cantidad); cons[k].usd += Number(l.cantidad) * Number(l.costo_unit_usd); cons[k].n++; });
+  const C = [[`ÜXELL — CONSUMO DE MATERIAS PRIMAS ${nombreMes}`], [], ['Código','Materia prima','Unidad','Cantidad usada','Costo U$S','Costo promedio U$S/unid','Partidas en que se usó']];
+  Object.entries(cons).sort((a,b) => b[1].usd - a[1].usd).forEach(([k, c]) => C.push([I(k).codigo, I(k).nombre, I(k).unidad, r(c.q,3), r(c.usd,2), c.q ? r(c.usd/c.q) : null, c.n]));
+  hoja(C, [10,40,8,14,12,16,12], 'Consumo MP');
+
+  // ---- Una solapa por partida (como la planilla de Romina)
+  parts.forEach(p => {
+    const L = ins.filter(l => l.partida_id === p.id), E = env.filter(e => e.partida_id === p.id);
+    const extra = Number(p.energia_usd||0) + Number(p.accesorios_usd||0);
+    const A = [
+      ['Nº PARTIDA', p.nro, '', 'FECHA', p.fecha, '', 'LOTE', p.lote || ''],
+      ['CÓDIGO', p.producto_codigo, '', 'PRODUCTO', p.producto_nombre],
+      ['CANT. TEÓRICA', r(p.cant_teorica,2), '', 'LITROS PRODUCIDOS', r(p.litros_producidos,2), '', 'DÓLAR', r(p.cotizacion,2)],
+      [],
+      ['CÓDIGO','INSUMO','UNIDAD','CANT. RECETA','CANT. REAL','DESVÍO %','U$S / UNID','SUBTOTAL U$S','FECHA PRECIO']];
+    L.forEach(l => A.push([I(l.insumo_id).codigo, I(l.insumo_id).nombre, I(l.insumo_id).unidad, r(l.cantidad_receta,3), r(l.cantidad,3),
+      l.cantidad_receta ? r((l.cantidad / l.cantidad_receta - 1) * 100, 1) : null, r(l.costo_unit_usd), r(l.cantidad * l.costo_unit_usd, 2), l.fecha_valuacion || '']));
+    if (!L.length) A.push(['', p.origen === 'historica' ? '(partida histórica: la planilla no tenía el detalle de insumos)' : '(sin insumos cargados)']);
+    A.push([], ['', 'COSTO INSUMOS', '', '', '', '', '', r(p.costo_insumos_usd,2)],
+      ['', `MERMA POR ENVASADO (${r(p.merma_pct*100,2)}%)`, '', '', '', '', '', r(p.costo_merma_usd,2)]);
+    if (extra) A.push(['', 'ENERGÍA Y ACCESORIOS', '', '', '', '', '', r(extra,2)]);
+    A.push([], ['CÓDIGO','ENVASE','CANTIDAD','LITROS','U$S / ENVASE','SUBTOTAL U$S','COSTO ENVASE LLENO U$S']);
+    E.forEach(e => { const it = I(e.envase_id), lts = Number(it.litros_envase||0);
+      A.push([it.codigo, it.nombre, r(e.cantidad,0), r(lts * e.cantidad,2), r(e.costo_unit_usd), r(e.cantidad * e.costo_unit_usd,2), p.costo_granel_lt_usd ? r(p.costo_granel_lt_usd * lts + Number(e.costo_unit_usd)) : null]); });
+    if (!E.length) A.push(['', '(sin envasar: uso interno o granel)']);
+    A.push([], ['', 'COSTO ENVASES', '', '', '', r(p.costo_envases_usd,2)], [],
+      ['RESULTADO', '', '', 'U$S / LT', '$ / LT'],
+      ['', '① Costo granel', '', r(p.costo_granel_lt_usd), p.cotizacion ? r(p.costo_granel_lt_usd * p.cotizacion, 2) : null],
+      ['', '② Costo con envase', '', r(p.costo_envasado_lt_usd), p.cotizacion && p.costo_envasado_lt_usd ? r(p.costo_envasado_lt_usd * p.cotizacion, 2) : null],
+      ['', '③ Con gastos del mes', '', r(p.costo_total_lt_usd), p.cotizacion && p.costo_total_lt_usd ? r(p.costo_total_lt_usd * p.cotizacion, 2) : null]);
+    if (p.horas_hombre) A.push(['', `Horas hombre: ${p.horas_hombre}`]);
+    if (p.nota) A.push([], ['NOTA', p.nota]);
+    hoja(A, [11,38,10,13,13,10,12,13,13], String(p.nro));
+  });
+
+  // ---- Detalle plano (para filtrar)
+  const D = [['Nº partida','Fecha','Producto','Código insumo','Insumo','Unidad','Cant. receta','Cant. real','U$S/unid','Subtotal U$S']];
+  ins.forEach(l => { const p = parts.find(x => x.id === l.partida_id);
+    D.push([p.nro, p.fecha, `${p.producto_codigo} ${p.producto_nombre}`, I(l.insumo_id).codigo, I(l.insumo_id).nombre, I(l.insumo_id).unidad, r(l.cantidad_receta,3), r(l.cantidad,3), r(l.costo_unit_usd), r(l.cantidad * l.costo_unit_usd, 2)]); });
+  hoja(D, [10,11,36,12,38,8,12,12,10,12], 'Detalle insumos');
+
+  XLSX.writeFile(wb, `Uxell_Partidas_fabricadas_${mes}.xlsx`);
+}
+
 function descargarXLSX(nombre, hojas){
   const wb = XLSX.utils.book_new();
   Object.entries(hojas).forEach(([n, rows]) => XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), n.slice(0,31)));
@@ -1203,11 +1293,21 @@ VISTAS.config = async app => {
       <p class="small muted">Para sumar meses que faltan (por ej. septiembre y octubre 2026). Elegí el archivo "PARTIDAS FABRICADAS …xlsx". Las partidas que ya existen no se duplican. No mueven stock.</p>
       <input type="file" id="ppFile" accept=".xlsx"><div id="ppOut"></div></div>
     <div class="card"><h2 style="margin-top:0">Usuarios y permisos</h2><p class="small muted">Cada persona se registra con su mail en la pantalla de ingreso; después le das los permisos acá.</p><div class="tw" id="us"></div></div>
-    <div class="card"><h2 style="margin-top:0">Copia de seguridad</h2><p class="small muted">Descarga toda la base en un Excel. Recomendado una vez por mes (el plan gratuito no guarda backups automáticos).</p><button class="btn" id="bk">Descargar respaldo</button></div>` : ''}`;
+    <div class="card"><h2 style="margin-top:0">Copias de seguridad</h2>
+      <p class="small">Todos los <b>domingos a la madrugada</b> se guarda sola una copia completa de la base en un espacio privado. Se conservan las últimas 30. También podés hacer una en el momento.</p>
+      <p class="small muted">Recomendación: una vez por mes descargá la última copia y el respaldo en Excel, y guardalos fuera del sistema (Drive, OneDrive o un pendrive).</p>
+      <div class="row"><button class="btn" id="cpNow">Hacer una copia ahora</button><button class="btn sec" id="bk">Descargar todo en Excel</button></div>
+      <div id="cpList" style="margin-top:10px"><p class="muted small">Cargando copias…</p></div></div>` : ''}`;
   $('#salir', app).onclick = async () => { await sb.auth.signOut(); location.reload(); };
   const pv = $('#pvFile', app); if (pv) pv.onchange = () => guard(() => importarPreciosVenta(pv.files[0], $('#pvMes', app).value, $('#pvOut', app)));
   const pp = $('#ppFile', app); if (pp) pp.onchange = () => guard(() => importarPartidasXLSX(pp.files[0], $('#ppOut', app)));
   const bk = $('#bk', app); if (bk) bk.onclick = () => guard(respaldo);
+  if ($('#cpList', app)) { listarCopias($('#cpList', app));
+    $('#cpNow', app).onclick = () => guard(async () => { const b = $('#cpNow', app); b.disabled = true; b.textContent = 'Haciendo la copia…';
+      try { const { data, error } = await sb.functions.invoke('copia-seguridad', { body: { origen:'manual' } });
+        if (error) throw new Error(error.message); if (data && data.error) throw new Error(data.error);
+        toast(`Copia guardada: ${data.conteo.partidas} partidas, ${data.conteo.compras} compras, ${data.conteo.items} items`); listarCopias($('#cpList', app));
+      } finally { b.disabled = false; b.textContent = 'Hacer una copia ahora'; } }); }
   const ci = $('#ciFile', app); if (ci) ci.onchange = () => guard(() => cargaInicial(ci.files[0], $('#ciOut', app)));
   if (isAdmin()) {
     const us = chk(await sb.from('perfiles').select('*').order('creado_en'));
@@ -1341,6 +1441,19 @@ async function cargaInicial(file, out){
   await cargarBase();
   out.innerHTML = `<div class="alert info">Carga inicial terminada: ${J.items.length} items, ${J.recetas.length} recetas, ${J.compras.length} compras y ${J.partidas.length} partidas.</div>`;
   toast('Carga inicial terminada');
+}
+
+
+async function listarCopias(el){
+  const { data, error } = await sb.storage.from('copias').list('', { limit: 100, sortBy: { column:'name', order:'desc' } });
+  if (error) { el.innerHTML = `<p class="small" style="color:var(--bad)">No se pudieron leer las copias: ${esc(error.message)}</p>`; return; }
+  const L = (data || []).filter(f => f.name.startsWith('copia_'));
+  if (!L.length) { el.innerHTML = '<p class="muted small">Todavía no hay copias guardadas.</p>'; return; }
+  const urls = (await sb.storage.from('copias').createSignedUrls(L.map(f => f.name), 3600, { download: true })).data || [];
+  const lindo = n => { const m = n.match(/copia_(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(_auto)?/); return m ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]} hs · ${m[6] ? 'automática' : 'manual'}` : n; };
+  el.innerHTML = `<table><thead><tr><th>Copia</th><th class="n">Tamaño</th><th></th></tr></thead><tbody>${L.map((f, i) => `<tr><td>${lindo(f.name)}</td>
+    <td class="n">${nf((f.metadata?.size || 0) / 1048576, 1)} MB</td><td class="right">${urls[i]?.signedUrl ? `<a class="btn sec sm" href="${urls[i].signedUrl}">Descargar</a>` : ''}</td></tr>`).join('')}</tbody></table>
+    <p class="small muted">El archivo descargado (.json.gz) contiene todas las tablas. Si algún día hace falta restaurar, pasáselo a Claude.</p>`;
 }
 
 async function respaldo(){
