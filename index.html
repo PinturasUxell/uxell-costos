@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#111111">
+<meta name="theme-color" content="#000000">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Uxell Costos</title>
 <link rel="manifest" href="manifest.json">
@@ -22,8 +22,9 @@ html,body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 Inter,sy
 button,input,select,textarea{font:inherit;color:inherit}
 a{color:var(--accent)}
 .hidden{display:none!important}
-header.top{position:sticky;top:0;z-index:20;background:#111;color:#fff;display:flex;align-items:center;gap:10px;
+header.top{position:sticky;top:0;z-index:20;background:#000;color:#fff;display:flex;align-items:center;gap:10px;
   padding:calc(env(safe-area-inset-top) + 10px) 14px 10px}
+.logo{height:38px;width:auto;display:block}
 .pill{background:#000;color:#fff;border:1px solid #333;border-radius:999px;padding:4px 12px;font-weight:700;letter-spacing:.5px}
 .grad{height:3px;background:linear-gradient(90deg,var(--brand1),var(--brand2))}
 header .ttl{font-weight:600;opacity:.9}
@@ -109,12 +110,25 @@ tr.click:hover td{background:#faf8fe}
   .printhead{display:block!important}
 }
 .printhead{display:none;margin-bottom:8px}
+.dash{display:grid;gap:12px;grid-template-columns:1fr}
+@media(min-width:900px){.dash{grid-template-columns:1fr 1fr}.dash .full{grid-column:1/-1}}
+.dash .card{margin:0}
+.dash h2{margin:0 0 8px;font-size:15px}
+.hero{display:flex;align-items:center;gap:16px;background:#000;color:#fff;border-radius:var(--r);padding:14px 18px;margin-bottom:12px}
+.hero img{height:70px}
+.hero .t{font-size:20px;font-weight:700}.hero .s{opacity:.75;font-size:13px}
+.barra{display:flex;align-items:center;gap:8px;margin:5px 0;font-size:13px}
+.barra .nm{flex:0 0 46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.barra .bg{flex:1;background:#efeaf8;border-radius:6px;height:16px;position:relative}
+.barra .fg{background:linear-gradient(90deg,var(--brand1),#c44fd0);border-radius:6px;height:16px}
+.barra .v{flex:0 0 74px;text-align:right;font-variant-numeric:tabular-nums}
+.minitw{max-height:320px;overflow:auto}
 @media(max-width:600px){.hm{display:none}}
 </style>
 </head>
 <body>
 <header class="top">
-  <span class="pill">Üxell</span><span class="ttl">Costos</span>
+  <img src="logo.png" alt="Üxell Pinturas" class="logo"><span class="ttl">Costos</span>
   <span class="sp"></span>
   <span class="dolar hidden" id="hdrDolar" title="Dólar oficial BNA"></span>
   <span class="usr hidden" id="hdrUser"></span>
@@ -300,39 +314,74 @@ VISTAS.mas = async app => {
 //  INICIO
 // =====================================================================
 VISTAS.inicio = async app => {
-  const [rev, borr, stockNeg, gm] = await Promise.all([
-    fetchAll(() => sb.from('v_revision_precios').select('item_id,dias,tipo')),
+  const mesIni = mesActual() + '-01';
+  const d5 = new Date(); d5.setDate(1); d5.setMonth(d5.getMonth() - 4); const desde5 = d5.toISOString().slice(0,7) + '-01';
+  const [rev, borr, gm, meses, prodMes, consMes, stock] = await Promise.all([
+    fetchAll(() => sb.from('v_revision_precios').select('item_id,codigo,nombre,tipo,unidad,dias,fecha,costo_usd,origen')),
     sb.from('partidas').select('id,nro,fecha,producto_id').eq('estado','borrador').order('fecha'),
-    sb.from('v_stock').select('item_id,codigo,nombre,stock,unidad').lt('stock', 0).limit(50),
-    sb.from('gastos_mes').select('*').eq('periodo', mesActual() + '-01').maybeSingle()
-  ]);
-  const viejos = rev.filter(r => r.tipo !== 'interno' && (r.dias == null || r.dias > 30)).length;
-  const sinVal = rev.filter(r => r.dias == null).length;
-  const borradores = chk(borr);
-  const neg = chk(stockNeg);
-  const mes = await sb.from('v_mes_produccion').select('*').eq('periodo', mesActual() + '-01').maybeSingle();
-  const m = mes.data || { partidas:0, litros:0, horas:0 };
+    sb.from('gastos_mes').select('periodo').eq('periodo', mesIni).maybeSingle(),
+    sb.from('v_mes_produccion').select('*').gte('periodo', desde5).order('periodo'),
+    sb.from('v_prod_mes_producto').select('*').eq('periodo', mesIni).order('litros', { ascending:false }).limit(10),
+    sb.from('v_consumo_mes').select('*').eq('periodo', mesIni).order('usd', { ascending:false }).limit(10),
+    fetchAll(() => sb.from('v_stock').select('*').eq('tipo','mp').order('codigo')) ]);
+  const borradores = chk(borr), M = chk(meses), PM = chk(prodMes), CM = chk(consMes);
+  const viejos = rev.filter(r => r.tipo !== 'interno' && (r.dias == null || r.dias > 60)).sort((a,b) => (b.dias ?? 99999) - (a.dias ?? 99999));
+  const neg = stock.filter(r => r.stock < 0);
+  const lista5 = []; for (let i = 4; i >= 0; i--) { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i); lista5.push(d.toISOString().slice(0,7) + '-01'); }
+  const porMes = Object.fromEntries(M.map(x => [x.periodo, x]));
+  const mesAct = porMes[mesIni] || { partidas:0, litros:0 };
+  const nomMes = p => new Date(p + 'T12:00').toLocaleDateString('es-AR', { month:'short', year:'2-digit' });
+  const barras = (rows, val, fmt, lab) => { const mx = Math.max(...rows.map(val), 1);
+    return rows.map(r => `<div class="barra"><span class="nm" title="${esc(lab(r))}">${esc(lab(r))}</span><span class="bg"><span class="fg" style="display:block;width:${(val(r)/mx*100).toFixed(1)}%"></span></span><span class="v">${fmt(val(r))}</span></div>`).join(''); };
+  const nombreMes = new Date().toLocaleDateString('es-AR', { month:'long' });
+
   app.innerHTML = `
-    <h1>Hola ${esc(S.perfil.nombre || '')} 👋</h1>
-    <div class="grid">
-      <div class="kpi"><div class="l">Partidas cerradas este mes</div><div class="v">${m.partidas}</div></div>
-      <div class="kpi"><div class="l">Litros fabricados este mes</div><div class="v">${nf(m.litros,0)}</div></div>
-      <div class="kpi"><div class="l">Precios con más de 30 días</div><div class="v" style="color:${viejos? 'var(--warn)':'var(--ok)'}">${viejos}</div></div>
-      <div class="kpi"><div class="l">Dólar BNA</div><div class="v">${S.dolar ? ars(S.dolar,2) : '—'}</div><div class="l">${fd(S.dolarFecha)}</div></div>
+    <div class="hero"><img src="logo.png" alt="Üxell"><div><div class="t">Tablero de producción</div><div class="s">Hola ${esc(S.perfil.nombre || '')} · ${new Date().toLocaleDateString('es-AR', { weekday:'long', day:'numeric', month:'long' })}</div></div></div>
+    <div class="grid" style="margin-bottom:12px">
+      <div class="kpi"><div class="l">Litros fabricados en ${nombreMes}</div><div class="v">${nf(mesAct.litros,0)}</div><div class="l">${mesAct.partidas} partidas</div></div>
+      <div class="kpi"><div class="l">Promedio últimos 5 meses</div><div class="v">${nf(lista5.reduce((s,p) => s + Number(porMes[p]?.litros||0), 0) / 5, 0)}</div><div class="l">litros por mes</div></div>
+      <div class="kpi"><div class="l">Precios con más de 60 días</div><div class="v" style="color:${viejos.length ? 'var(--bad)' : 'var(--ok)'}">${viejos.length}</div><div class="l">insumos y envases</div></div>
+      <div class="kpi"><div class="l">Dólar BNA</div><div class="v">${S.dolar ? ars(S.dolar,0) : '—'}</div><div class="l">${fd(S.dolarFecha)}</div></div>
     </div>
-    <h2>Pendientes</h2>
     ${S.dolarFecha !== hoy() ? `<div class="alert info">El dólar cargado es del ${fd(S.dolarFecha)}. <a href="#" id="actDolar">Actualizar dólar de hoy</a></div>` : ''}
     ${borradores.length ? `<div class="alert">Hay ${borradores.length} partida(s) en borrador sin cerrar: ${borradores.map(b => `<a href="#produccion" data-p="${b.id}">#${b.nro}</a>`).join(', ')}</div>` : ''}
-    ${viejos ? `<div class="alert">${viejos} insumos o envases tienen el precio con más de 30 días${sinVal ? ` (${sinVal} sin valuar)` : ''}. <a href="#precios">Revisar precios</a></div>` : ''}
-    ${neg.length ? `<div class="alert bad">${neg.length} item(s) con stock negativo. <a href="#stock">Ver stock</a></div>` : ''}
-    ${!gm.data && new Date().getDate() > 25 ? `<div class="alert info">Todavía no se cargaron los gastos de ${mesActual()}. <a href="#gastos">Cargar gastos del mes</a></div>` : ''}
-    ${!borradores.length && !viejos && !neg.length ? '<div class="alert info">Todo al día ✅</div>' : ''}
-    <h2>Accesos rápidos</h2>
-    <div class="row">
+    ${!gm.data && new Date().getDate() > 25 ? `<div class="alert info">Todavía no se cargaron los gastos de ${nombreMes}. <a href="#gastos">Cargar gastos del mes</a></div>` : ''}
+    <div class="row noprint" style="margin-bottom:12px">
       ${can('compras') ? '<button class="btn" onclick="location.hash=\'compras\';setTimeout(()=>nuevaCompra(),300)">+ Nueva compra</button>' : ''}
       ${can('produccion') ? '<button class="btn" onclick="location.hash=\'produccion\';setTimeout(()=>editorPartida(null),300)">+ Nueva partida</button>' : ''}
-      <button class="btn sec" onclick="location.hash='informes'">Lista de costos</button>
+      <button class="btn sec" onclick="informe='costos';location.hash='informes'">Lista de costos</button>
+    </div>
+    <div class="dash">
+      <div class="card full"><h2>Litros fabricados · últimos 5 meses</h2><div class="chartbox" style="height:230px"><canvas id="chMeses"></canvas></div></div>
+      <div class="card"><h2>Productos más producidos en ${nombreMes}</h2>
+        ${PM.length ? barras(PM, r => Number(r.litros), v => nf(v,0) + ' lt', r => (S.itemById[r.producto_id]?.codigo || '') + ' · ' + (S.itemById[r.producto_id]?.nombre || '')) : '<p class="muted small">Todavía no hay partidas cerradas este mes.</p>'}</div>
+      <div class="card"><h2>Materias primas más utilizadas en ${nombreMes}</h2>
+        ${CM.length ? `<div class="minitw"><table><thead><tr><th>Materia prima</th><th class="n">Cantidad</th><th class="n">U$S</th></tr></thead><tbody>${CM.map(c => { const i = S.itemById[c.insumo_id] || {};
+          return `<tr><td><b>${esc(i.codigo)}</b> <span class="small">${esc(i.nombre)}</span></td><td class="n">${nf(c.cantidad,0)} ${esc(i.unidad||'')}</td><td class="n">${nf(c.usd,0)}</td></tr>`; }).join('')}</tbody></table></div>` : '<p class="muted small">Todavía no hay consumos este mes.</p>'}</div>
+      <div class="card"><h2>Precios con más de 60 días sin actualizar <span class="badge b-bad">${viejos.length}</span></h2>
+        ${viejos.length ? `<div class="minitw"><table><thead><tr><th>Insumo / envase</th><th class="n">U$S</th><th>Última valuación</th></tr></thead><tbody>${viejos.map(r => `<tr class="click" data-v="${r.item_id}"><td><b>${esc(r.codigo)}</b> <span class="small">${esc(r.nombre)}</span></td><td class="n">${nf(r.costo_usd,3)}</td><td class="nowrap">${r.fecha ? fd(r.fecha) : ''} ${edadBadge(r.dias)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="small" style="color:var(--ok)">Todos los precios están actualizados ✅</p>'}</div>
+      <div class="card"><h2>Stock de materias primas ${neg.length ? `<span class="badge b-bad">${neg.length} negativos</span>` : ''}</h2>
+        <input id="qStock" placeholder="Buscar materia prima…" style="margin-bottom:6px">
+        <div class="minitw" id="tbStock"></div>
+        <p class="small muted" style="margin:6px 0 0">${stock.some(r => r.tiene_inicial) ? '' : 'Todavía no se cargó el stock inicial: los saldos no son confiables. '}<a href="#stock">Ver stock completo</a></p></div>
     </div>`;
+
+  // gráfico de los últimos 5 meses
+  new Chart($('#chMeses', app), { type:'bar',
+    data:{ labels: lista5.map(nomMes), datasets:[{ label:'Litros', data: lista5.map(p => Number(porMes[p]?.litros || 0)),
+      backgroundColor: lista5.map((p, i) => i === 4 ? '#f5c518' : '#6b2fd6'), borderRadius:6 }] },
+    options:{ maintainAspectRatio:false, plugins:{ legend:{ display:false }, tooltip:{ callbacks:{ label: c => nf(c.raw,0) + ' litros · ' + (porMes[lista5[c.dataIndex]]?.partidas || 0) + ' partidas' } } },
+      scales:{ y:{ ticks:{ callback: v => nf(v,0) } } } } });
+
+  // stock de materias primas
+  const drawStock = () => { const q = ($('#qStock', app).value || '').toUpperCase();
+    const f = stock.filter(r => !q || (r.codigo + ' ' + r.nombre).toUpperCase().includes(q)).sort((a, b) => (a.stock < 0) === (b.stock < 0) ? a.codigo.localeCompare(b.codigo, 'es', {numeric:true}) : (a.stock < 0 ? -1 : 1));
+    $('#tbStock', app).innerHTML = `<table><thead><tr><th>Materia prima</th><th class="n">Stock</th><th></th></tr></thead><tbody>${f.map(r => `<tr class="click" data-s="${r.item_id}"><td><b>${esc(r.codigo)}</b> <span class="small">${esc(r.nombre)}</span></td>
+      <td class="n" style="${r.stock < 0 ? 'color:var(--bad);font-weight:600' : ''}">${nf(r.stock,1)} ${esc(r.unidad)}</td>
+      <td>${!r.tiene_inicial ? '<span class="badge b-gray">sin inicial</span>' : r.stock < 0 ? '<span class="badge b-bad">negativo</span>' : r.stock_minimo && r.stock < r.stock_minimo ? '<span class="badge b-warn">bajo mín.</span>' : '<span class="badge b-ok">ok</span>'}</td></tr>`).join('')}</tbody></table>`;
+    $$('[data-s]', app).forEach(tr => tr.onclick = () => fichaStock(Number(tr.dataset.s), () => VISTAS.inicio(app))); };
+  $('#qStock', app).oninput = drawStock; drawStock();
+  $$('[data-v]', app).forEach(tr => tr.onclick = () => fichaPrecio(Number(tr.dataset.v), () => VISTAS.inicio(app)));
   const a = $('#actDolar', app); if (a) a.onclick = e => { e.preventDefault(); editarDolar(); };
   $$('[data-p]', app).forEach(x => x.onclick = e => { e.preventDefault(); location.hash = 'produccion'; setTimeout(() => editorPartida(Number(x.dataset.p)), 300); });
 };
@@ -1469,7 +1518,7 @@ async function respaldo(){
 // =====================================================================
 function pantallaLogin(msg){
   $('#nav').classList.add('hidden'); $('#hdrUser').classList.add('hidden'); $('#hdrDolar').classList.add('hidden');
-  $('#app').innerHTML = `<div class="login card"><h1>Ingresar</h1>${msg ? `<div class="alert">${msg}</div>` : ''}
+  $('#app').innerHTML = `<div class="login card"><div style="background:#000;border-radius:12px;padding:14px;text-align:center;margin-bottom:12px"><img src="logo.png" alt="Üxell Pinturas" style="height:90px"></div><h1>Uxell Costos · Ingresar</h1>${msg ? `<div class="alert">${msg}</div>` : ''}
     <label class="f">Email</label><input type="email" id="em" autocomplete="username">
     <label class="f" style="margin-top:8px">Contraseña</label><input type="password" id="pw" autocomplete="current-password">
     <div class="row" style="margin-top:12px"><button class="btn" id="in">Ingresar</button><button class="btn sec" id="reg">Crear cuenta</button></div>
