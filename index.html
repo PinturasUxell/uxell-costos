@@ -150,7 +150,7 @@ const SUPABASE_ANON_KEY = 'sb_publishable_JgkZSgclP3J2m1Twoaf-oQ_FBGtJvo7';
 // =====================================================================
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-const S = { user:null, perfil:null, items:[], itemById:{}, prov:[], val:{}, dolar:null, dolarFecha:null };
+const S = { user:null, perfil:null, items:[], itemById:{}, prov:[], val:{}, bases:[], baseById:{}, dolar:null, dolarFecha:null };
 const $ = (s, el=document) => el.querySelector(s);
 const $$ = (s, el=document) => [...el.querySelectorAll(s)];
 const esc = s => s==null ? '' : String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -231,12 +231,14 @@ function edadBadge(dias){
 
 // ---------------------------------------------------------------- DATOS BASE
 async function cargarBase(){
-  const [items, prov, val, cot] = await Promise.all([
+  const [items, prov, val, cot, bases] = await Promise.all([
     fetchAll(() => sb.from('items').select('*').order('codigo')),
     fetchAll(() => sb.from('proveedores').select('*').order('nombre')),
     fetchAll(() => sb.from('v_ultima_valuacion').select('*')),
-    sb.from('cotizaciones').select('*').order('fecha', {ascending:false}).limit(1)
+    sb.from('cotizaciones').select('*').order('fecha', {ascending:false}).limit(1),
+    fetchAll(() => sb.from('mp_base').select('*').order('nombre'))
   ]);
+  S.bases = bases; S.baseById = Object.fromEntries(bases.map(b => [b.id, b]));
   S.items = items; S.itemById = Object.fromEntries(items.map(i => [i.id, i]));
   S.prov = prov; S.val = Object.fromEntries(val.map(v => [v.item_id, v]));
   const c = chk(cot)[0]; S.dolar = c ? Number(c.valor) : null; S.dolarFecha = c ? c.fecha : null;
@@ -247,6 +249,7 @@ async function recargarVal(){
   S.val = Object.fromEntries(val.map(v => [v.item_id, v]));
 }
 async function recargarItems(){
+  S.bases = await fetchAll(() => sb.from('mp_base').select('*').order('nombre')); S.baseById = Object.fromEntries(S.bases.map(b => [b.id, b]));
   S.items = await fetchAll(() => sb.from('items').select('*').order('codigo'));
   S.itemById = Object.fromEntries(S.items.map(i => [i.id, i]));
 }
@@ -278,7 +281,7 @@ const RUTAS = [
   { id:'inicio',     ic:'🏠', t:'Inicio' },
   { id:'compras',    ic:'🧾', t:'Compras' },
   { id:'precios',    ic:'💲', t:'Precios' },
-  { id:'produccion', ic:'🧪', t:'Producción' },
+  { id:'produccion', ic:'🧪', t:'Reg. Producción' },
   { id:'recetas',    ic:'📋', t:'Recetas' },
   { id:'stock',      ic:'📦', t:'Stock' },
   { id:'gastos',     ic:'⚡', t:'Gastos mes' },
@@ -322,8 +325,8 @@ VISTAS.inicio = async app => {
     sb.from('gastos_mes').select('periodo').eq('periodo', mesIni).maybeSingle(),
     sb.from('v_mes_produccion').select('*').gte('periodo', desde5).order('periodo'),
     sb.from('v_prod_mes_producto').select('*').eq('periodo', mesIni).order('litros', { ascending:false }).limit(10),
-    sb.from('v_consumo_mes').select('*').eq('periodo', mesIni).order('usd', { ascending:false }).limit(10),
-    fetchAll(() => sb.from('v_stock').select('*').eq('tipo','mp').order('codigo')) ]);
+    sb.from('v_consumo_mes_base').select('*').eq('periodo', mesIni).order('usd', { ascending:false }).limit(10),
+    fetchAll(() => sb.from('v_stock_base').select('*').order('nombre')) ]);
   const borradores = chk(borr), M = chk(meses), PM = chk(prodMes), CM = chk(consMes);
   const viejos = rev.filter(r => r.tipo !== 'interno' && (r.dias == null || r.dias > 60)).sort((a,b) => (b.dias ?? 99999) - (a.dias ?? 99999));
   const neg = stock.filter(r => r.stock < 0);
@@ -348,7 +351,7 @@ VISTAS.inicio = async app => {
     ${!gm.data && new Date().getDate() > 25 ? `<div class="alert info">Todavía no se cargaron los gastos de ${nombreMes}. <a href="#gastos">Cargar gastos del mes</a></div>` : ''}
     <div class="row noprint" style="margin-bottom:12px">
       ${can('compras') ? '<button class="btn" onclick="location.hash=\'compras\';setTimeout(()=>nuevaCompra(),300)">+ Nueva compra</button>' : ''}
-      ${can('produccion') ? '<button class="btn" onclick="location.hash=\'produccion\';setTimeout(()=>editorPartida(null),300)">+ Nueva partida</button>' : ''}
+      ${can('produccion') ? '<button class="btn" onclick="location.hash=\'produccion\';setTimeout(()=>editorPartida(null),300)">+ Registro de Producción</button>' : ''}
       <button class="btn sec" onclick="informe='costos';location.hash='informes'">Lista de costos</button>
     </div>
     <div class="dash">
@@ -356,8 +359,8 @@ VISTAS.inicio = async app => {
       <div class="card"><h2>Productos más producidos en ${nombreMes}</h2>
         ${PM.length ? barras(PM, r => Number(r.litros), v => nf(v,0) + ' lt', r => (S.itemById[r.producto_id]?.codigo || '') + ' · ' + (S.itemById[r.producto_id]?.nombre || '')) : '<p class="muted small">Todavía no hay partidas cerradas este mes.</p>'}</div>
       <div class="card"><h2>Materias primas más utilizadas en ${nombreMes}</h2>
-        ${CM.length ? `<div class="minitw"><table><thead><tr><th>Materia prima</th><th class="n">Cantidad</th><th class="n">U$S</th></tr></thead><tbody>${CM.map(c => { const i = S.itemById[c.insumo_id] || {};
-          return `<tr><td><b>${esc(i.codigo)}</b> <span class="small">${esc(i.nombre)}</span></td><td class="n">${nf(c.cantidad,0)} ${esc(i.unidad||'')}</td><td class="n">${nf(c.usd,0)}</td></tr>`; }).join('')}</tbody></table></div>` : '<p class="muted small">Todavía no hay consumos este mes.</p>'}</div>
+        ${CM.length ? `<div class="minitw"><table><thead><tr><th>Materia prima</th><th class="n">Cantidad</th><th class="n">U$S</th></tr></thead><tbody>${CM.map(c =>
+          `<tr><td><b>${esc(c.nombre)}</b> <span class="small muted">${esc(c.codigos)}</span></td><td class="n">${nf(c.cantidad,0)} ${esc(c.unidad||'')}</td><td class="n">${nf(c.usd,0)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted small">Todavía no hay consumos este mes.</p>'}</div>
       <div class="card"><h2>Precios con más de 60 días sin actualizar <span class="badge b-bad">${viejos.length}</span></h2>
         ${viejos.length ? `<div class="minitw"><table><thead><tr><th>Insumo / envase</th><th class="n">U$S</th><th>Última valuación</th></tr></thead><tbody>${viejos.map(r => `<tr class="click" data-v="${r.item_id}"><td><b>${esc(r.codigo)}</b> <span class="small">${esc(r.nombre)}</span></td><td class="n">${nf(r.costo_usd,3)}</td><td class="nowrap">${r.fecha ? fd(r.fecha) : ''} ${edadBadge(r.dias)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="small" style="color:var(--ok)">Todos los precios están actualizados ✅</p>'}</div>
       <div class="card"><h2>Stock de materias primas ${neg.length ? `<span class="badge b-bad">${neg.length} negativos</span>` : ''}</h2>
@@ -375,11 +378,11 @@ VISTAS.inicio = async app => {
 
   // stock de materias primas
   const drawStock = () => { const q = ($('#qStock', app).value || '').toUpperCase();
-    const f = stock.filter(r => !q || (r.codigo + ' ' + r.nombre).toUpperCase().includes(q)).sort((a, b) => (a.stock < 0) === (b.stock < 0) ? a.codigo.localeCompare(b.codigo, 'es', {numeric:true}) : (a.stock < 0 ? -1 : 1));
-    $('#tbStock', app).innerHTML = `<table><thead><tr><th>Materia prima</th><th class="n">Stock</th><th></th></tr></thead><tbody>${f.map(r => `<tr class="click" data-s="${r.item_id}"><td><b>${esc(r.codigo)}</b> <span class="small">${esc(r.nombre)}</span></td>
+    const f = stock.filter(r => !q || (r.nombre + ' ' + r.lista_codigos).toUpperCase().includes(q)).sort((a, b) => (a.stock < 0) === (b.stock < 0) ? a.nombre.localeCompare(b.nombre, 'es') : (a.stock < 0 ? -1 : 1));
+    $('#tbStock', app).innerHTML = `<table><thead><tr><th>Materia prima</th><th class="n">Stock</th><th></th></tr></thead><tbody>${f.map(r => `<tr class="click" data-s="${r.mp_base_id}"><td><b>${esc(r.nombre)}</b> <span class="small muted">${esc(r.lista_codigos)}</span></td>
       <td class="n" style="${r.stock < 0 ? 'color:var(--bad);font-weight:600' : ''}">${nf(r.stock,1)} ${esc(r.unidad)}</td>
       <td>${!r.tiene_inicial ? '<span class="badge b-gray">sin inicial</span>' : r.stock < 0 ? '<span class="badge b-bad">negativo</span>' : r.stock_minimo && r.stock < r.stock_minimo ? '<span class="badge b-warn">bajo mín.</span>' : '<span class="badge b-ok">ok</span>'}</td></tr>`).join('')}</tbody></table>`;
-    $$('[data-s]', app).forEach(tr => tr.onclick = () => fichaStock(Number(tr.dataset.s), () => VISTAS.inicio(app))); };
+    $$('[data-s]', app).forEach(tr => tr.onclick = () => fichaBase(Number(tr.dataset.s))); };
   $('#qStock', app).oninput = drawStock; drawStock();
   $$('[data-v]', app).forEach(tr => tr.onclick = () => fichaPrecio(Number(tr.dataset.v), () => VISTAS.inicio(app)));
   const a = $('#actDolar', app); if (a) a.onclick = e => { e.preventDefault(); editarDolar(); };
@@ -417,7 +420,7 @@ VISTAS.compras = async app => {
     if (t) rows = rows.filter(r => { const i = S.itemById[r.item_id] || {}; return (i.codigo + ' ' + i.nombre + ' ' + (pmap[r.proveedor_id]||'') + ' ' + (r.oc||'') + ' ' + (r.factura_nro||'')).toUpperCase().includes(t); });
     $('#tabla', app).innerHTML = rows.length ? `<table><thead><tr><th>Fecha</th><th>Insumo</th><th class="hm">Proveedor</th><th class="n">Cantidad</th><th class="n hm">Precio</th><th class="n">U$S/unid</th><th>Entrega</th><th>Pago</th></tr></thead><tbody>${
       rows.map(r => { const i = S.itemById[r.item_id] || {};
-        return `<tr class="click" data-id="${r.id}"><td class="nowrap">${fd(r.fecha)}</td><td><b>${esc(i.codigo)}</b> ${esc(i.nombre)}</td><td class="hm">${esc(pmap[r.proveedor_id]||'—')}</td>
+        return `<tr class="click" data-id="${r.id}"><td class="nowrap">${fd(r.fecha)}</td><td><b>${esc(i.codigo)}</b> ${esc(i.nombre)}${r.lote_proveedor ? ` <span class="small muted">· lote ${esc(r.lote_proveedor)}</span>` : ''}</td><td class="hm">${esc(pmap[r.proveedor_id]||'—')}</td>
         <td class="n">${nf(r.cantidad,1)} ${esc(i.unidad||'')}</td><td class="n hm">${r.moneda==='ARS'?'$':'U$S'} ${nf(r.precio_unit,2)}</td>
         <td class="n">${nf(r.costo_con_gastos_usd ?? r.precio_unit_usd,3)}</td>
         <td>${r.fecha_entrega ? `<span class="badge b-ok">${fd(r.fecha_entrega)}</span>` : (r.origen==='importacion' ? '<span class="badge b-gray">planilla</span>' : '<span class="badge b-warn">pendiente</span>')}</td>
@@ -463,6 +466,7 @@ async function nuevaCompra(id){
       <div><label class="f">Condición de pago</label><input id="condicion_pago" value="${esc(v('condicion_pago'))}" placeholder="ej. 30 días"></div>
       <div><label class="f">Fecha estimada entrega</label><input type="date" id="fecha_estimada" value="${v('fecha_estimada')}"></div>
       <div><label class="f">Nº factura</label><input id="factura_nro" value="${esc(v('factura_nro'))}"></div>
+      <div><label class="f">Lote del proveedor</label><input id="lote_proveedor" value="${esc(v('lote_proveedor'))}" placeholder="opcional"></div>
     </div>
     <h3>2 · Entrega <span class="muted small">(lo recibido es lo que suma al stock)</span></h3>
     <div class="row">
@@ -521,7 +525,7 @@ async function nuevaCompra(id){
       const rec = { item_id: it.id, proveedor_id: prov_id, fecha: g('fecha'), oc: g('oc') || null,
         cantidad: num(g('cantidad')), cant_pedida: num(g('cant_pedida')), unid_pedida: g('unid_pedida') || null,
         moneda: g('moneda'), precio_unit: num(g('precio_unit')), cotizacion: cot, condicion_pago: g('condicion_pago') || null,
-        fecha_estimada: g('fecha_estimada') || null, factura_nro: g('factura_nro') || null,
+        fecha_estimada: g('fecha_estimada') || null, factura_nro: g('factura_nro') || null, lote_proveedor: g('lote_proveedor') || null,
         fecha_entrega: g('fecha_entrega') || null, remito: g('remito') || null, cant_recibida: g('fecha_entrega') ? num(g('cant_recibida')) : null,
         flete: num(g('flete'))||0, seguro: num(g('seguro'))||0, otros_gastos: num(g('otros_gastos'))||0,
         fecha_pago: g('fecha_pago') || null, importe_pagado: num(g('importe_pagado')), medio_pago: g('medio_pago') || null };
@@ -536,12 +540,12 @@ async function nuevaCompra(id){
 // =====================================================================
 //  PRECIOS (revisión de valuaciones)
 // =====================================================================
-let filtroPrecio = { tipo:'mp', viejos:false, q:'' };
+let filtroPrecio = { tipo:'base', viejos:false, q:'' };
 VISTAS.precios = async app => {
   app.innerHTML = `<h1>Revisión de precios</h1>
     <p class="muted small" style="margin-top:-6px">Última valuación de cada insumo y de dónde salió. Verde ≤ 30 días · amarillo ≤ 90 · rojo más viejo.</p>
     <div class="bar">
-      <div class="seg" id="seg"><button data-t="mp">Materias primas</button><button data-t="envase">Envases</button><button data-t="interno">Fabricación interna</button></div>
+      <div class="seg" id="seg"><button data-t="base">Por materia prima base</button><button data-t="mp">Por código</button><button data-t="envase">Envases</button><button data-t="interno">Fabricación interna</button></div>
       <input class="grow" id="q" placeholder="Buscar…" value="${esc(filtroPrecio.q)}">
       <label class="small nowrap"><input type="checkbox" id="viejos" style="width:auto" ${filtroPrecio.viejos?'checked':''}> Solo más de 30 días</label>
       ${can('precios') || can('compras') ? '<button class="btn sec" id="nuevo">+ Nuevo item</button>' : ''}
@@ -549,10 +553,21 @@ VISTAS.precios = async app => {
     </div>
     <div class="printhead"><b>Uxell · Revisión de precios</b> — ${fd(hoy())}</div>
     <div class="card"><div class="tw" id="tabla"></div></div>`;
-  const rows = await fetchAll(() => sb.from('v_revision_precios').select('*').order('codigo'));
+  const [rows, pbase] = await Promise.all([fetchAll(() => sb.from('v_revision_precios').select('*').order('codigo')), fetchAll(() => sb.from('v_precio_base').select('*'))]);
   const draw = () => {
     $$('#seg button', app).forEach(b => b.classList.toggle('on', b.dataset.t === filtroPrecio.tipo));
     const q = filtroPrecio.q.toUpperCase();
+    if (filtroPrecio.tipo === 'base') {
+      const pb = Object.fromEntries(pbase.map(x => [x.mp_base_id, x]));
+      const f = S.bases.map(b => ({ b, p: pb[b.id], cods: S.items.filter(i => i.mp_base_id === b.id) })).filter(x => x.cods.length
+        && (!filtroPrecio.viejos || !x.p || x.p.dias > 30) && (!q || (x.b.nombre + ' ' + x.cods.map(c => c.codigo + ' ' + c.nombre).join(' ')).toUpperCase().includes(q)));
+      $('#tabla', app).innerHTML = `<table><thead><tr><th>Materia prima</th><th class="hm">Códigos</th><th class="n">Último U$S</th><th class="n hm">$</th><th>Código / fecha</th><th>Antigüedad</th></tr></thead><tbody>${
+        f.map(x => `<tr class="click" data-b="${x.b.id}"><td><b>${esc(x.b.nombre)}</b></td><td class="hm small">${x.cods.length > 1 ? `<span class="badge b-info">${x.cods.length} códigos</span> ` : ''}${esc(x.cods.map(c => c.codigo).join(', '))}</td>
+          <td class="n">${x.p ? nf(x.p.costo_usd,4) : '—'}</td><td class="n hm">${x.p && S.dolar ? nf(x.p.costo_usd * S.dolar, 2) : '—'}</td>
+          <td class="small">${x.p ? esc(x.p.codigo) + ' · ' + fd(x.p.fecha) : ''}</td><td>${edadBadge(x.p ? x.p.dias : null)}</td></tr>`).join('')}</tbody></table><p class="small muted">${f.length} materias primas</p>`;
+      $$('tr[data-b]', app).forEach(tr => tr.onclick = () => fichaBase(Number(tr.dataset.b)));
+      return;
+    }
     const f = rows.filter(r => r.tipo === filtroPrecio.tipo && (!filtroPrecio.viejos || r.dias == null || r.dias > 30)
       && (!q || (r.codigo + ' ' + r.nombre).toUpperCase().includes(q)));
     $('#tabla', app).innerHTML = `<table><thead><tr><th>Código</th><th>Nombre</th><th>Unid</th><th class="n">U$S / unid</th><th class="n hm">$ / unid</th><th class="hm">Fecha valuación</th><th>Antigüedad</th><th>Origen</th></tr></thead><tbody>${
@@ -565,7 +580,7 @@ VISTAS.precios = async app => {
   $$('#seg button', app).forEach(b => b.onclick = () => { filtroPrecio.tipo = b.dataset.t; draw(); });
   $('#q', app).oninput = e => { filtroPrecio.q = e.target.value; draw(); };
   $('#viejos', app).onchange = e => { filtroPrecio.viejos = e.target.checked; draw(); };
-  const n = $('#nuevo', app); if (n) n.onclick = () => editarItem(null, filtroPrecio.tipo === 'interno' ? 'mp' : filtroPrecio.tipo, () => VISTAS.precios(app));
+  const n = $('#nuevo', app); if (n) n.onclick = () => editarItem(null, ['interno','base'].includes(filtroPrecio.tipo) ? 'mp' : filtroPrecio.tipo, () => VISTAS.precios(app));
   draw();
 };
 
@@ -575,6 +590,7 @@ async function fichaPrecio(itemId, onDone){
   const puede = can('precios') || can('compras');
   modal(`<h2>${esc(it.codigo)} · ${esc(it.nombre)}</h2>
     <p class="muted small">${tipoTxt(it.tipo)} · unidad ${esc(it.unidad)}${it.tipo==='interno' ? ' · se valúa con el costo real de su última partida' : ''}</p>
+    ${it.mp_base_id && S.items.filter(x => x.mp_base_id === it.mp_base_id).length > 1 ? `<div class="alert info small">Este código es parte de la materia prima base <b>${esc(S.baseById[it.mp_base_id]?.nombre)}</b> (${S.items.filter(x => x.mp_base_id === it.mp_base_id).length} códigos). <a href="#" id="verBase">Ver historial de precios y stock de la materia prima</a></div>` : ''}
     ${puede ? `<div class="card" style="background:#fffaf0"><h3 style="margin-top:0">Precio de reposición (ingreso manual)</h3>
       <div class="row"><div><label class="f">Fecha de valuación</label><input type="date" id="f" value="${hoy()}"></div>
       <div><label class="f">Moneda</label><select id="m"><option>USD</option><option value="ARS">ARS</option></select></div>
@@ -592,6 +608,7 @@ async function fichaPrecio(itemId, onDone){
       options:{ plugins:{legend:{display:false}}, maintainAspectRatio:false, scales:{ y:{ title:{display:true,text:'U$S'} } } } });
     else $('#ch', el).parentElement.remove();
     const ed = $('#ed', el); if (ed) ed.onclick = () => { close(); editarItem(itemId, null, onDone); };
+    const vb = $('#verBase', el); if (vb) vb.onclick = e => { e.preventDefault(); close(); fichaBase(it.mp_base_id); };
     const ok = $('#ok', el); if (ok) ok.onclick = () => guard(async () => {
       const p = num($('#p', el).value), c = num($('#c', el).value), m = $('#m', el).value;
       if (p == null) throw new Error('Ingresá el precio'); if (m === 'ARS' && !c) throw new Error('Falta el dólar');
@@ -599,6 +616,37 @@ async function fichaPrecio(itemId, onDone){
       chk(await sb.rpc('valuar_reposicion', { p_item: itemId, p_fecha: $('#f', el).value, p_costo_usd: costo, p_cotizacion: c, p_nota: $('#n', el).value || null }));
       await recargarVal(); close(); toast('Precio de reposición registrado'); onDone && onDone();
     });
+  });
+}
+
+// Historial de precios y stock de una materia prima base (todos sus códigos)
+async function fichaBase(baseId){
+  const b = S.baseById[baseId]; if (!b) return;
+  const cods = S.items.filter(i => i.mp_base_id === baseId); const ids = cods.map(i => i.id);
+  const [vals, comps, stk] = await Promise.all([
+    fetchAll(() => sb.from('valuaciones').select('item_id,fecha,costo_usd,origen').in('item_id', ids).order('fecha', { ascending:false })),
+    fetchAll(() => sb.from('compras').select('fecha,item_id,proveedor_id,cantidad,precio_unit_usd,costo_con_gastos_usd,lote_proveedor').in('item_id', ids).order('fecha', { ascending:false })),
+    fetchAll(() => sb.from('v_stock').select('item_id,stock').in('item_id', ids)) ]);
+  const pmap = Object.fromEntries(S.prov.map(p => [p.id, p.nombre])), smap = Object.fromEntries(stk.map(x => [x.item_id, Number(x.stock)]));
+  const total = stk.reduce((s, x) => s + Number(x.stock), 0);
+  modal(`<h2>${esc(b.nombre)}</h2><p class="muted small" style="margin-top:-6px">Materia prima base · ${cods.length} código(s) · stock total <b>${nf(total,1)} ${esc(b.unidad)}</b></p>
+    <h3>Códigos (proveedor / variante)</h3>
+    <div class="tw"><table><thead><tr><th>Código</th><th>Nombre</th><th class="n">Stock</th><th class="n">Último U$S</th><th>Fecha</th></tr></thead><tbody>
+    ${cods.map(i => { const v = S.val[i.id]; return `<tr class="click" data-i="${i.id}"><td><b>${esc(i.codigo)}</b></td><td class="small">${esc(i.nombre)}</td><td class="n">${nf(smap[i.id] || 0, 1)}</td><td class="n">${v ? nf(v.costo_usd,3) : '—'}</td><td>${v ? fd(v.fecha) : ''}</td></tr>`; }).join('')}</tbody></table></div>
+    <h3>Evolución del precio (todos los proveedores)</h3>
+    <div class="chartbox" style="height:200px"><canvas id="ch"></canvas></div>
+    <h3>Compras</h3>
+    <div class="tw" style="max-height:260px"><table><thead><tr><th>Fecha</th><th>Código</th><th>Proveedor</th><th>Lote</th><th class="n">Cant.</th><th class="n">U$S/u</th></tr></thead><tbody>
+    ${comps.map(c => `<tr><td>${fd(c.fecha)}</td><td>${esc(S.itemById[c.item_id]?.codigo)}</td><td>${esc(pmap[c.proveedor_id] || '')}</td><td>${esc(c.lote_proveedor || '')}</td><td class="n">${nf(c.cantidad,0)}</td><td class="n">${nf(c.costo_con_gastos_usd ?? c.precio_unit_usd,3)}</td></tr>`).join('') || '<tr><td colspan=6 class="muted">Sin compras registradas</td></tr>'}</tbody></table></div>
+    <h3>Valuaciones</h3>
+    <div class="tw" style="max-height:220px"><table><thead><tr><th>Fecha</th><th>Código</th><th class="n">U$S</th><th>Origen</th></tr></thead><tbody>
+    ${vals.map(v => `<tr><td>${fd(v.fecha)}</td><td>${esc(S.itemById[v.item_id]?.codigo)}</td><td class="n">${nf(v.costo_usd,4)}</td><td>${origenBadge(v.origen)}</td></tr>`).join('') || '<tr><td colspan=4 class="muted">Sin valuaciones</td></tr>'}</tbody></table></div>
+    <div class="mfoot"><button class="btn sec" data-close>Cerrar</button></div>`, (el, close) => {
+    $$('[data-i]', el).forEach(tr => tr.onclick = () => { close(); fichaPrecio(Number(tr.dataset.i)); });
+    const pts = vals.map(v => ({ x: v.fecha, y: Number(v.costo_usd) })).concat(comps.map(c => ({ x: c.fecha, y: Number(c.costo_con_gastos_usd ?? c.precio_unit_usd) }))).sort((a, b) => a.x.localeCompare(b.x));
+    if (pts.length > 1) new Chart($('#ch', el), { type:'line', data:{ labels: pts.map(p => fd(p.x)), datasets:[{ data: pts.map(p => p.y), borderColor:'#6b2fd6', tension:.2, pointRadius:3 }] },
+      options:{ maintainAspectRatio:false, plugins:{ legend:{ display:false } }, scales:{ y:{ title:{ display:true, text:'U$S' } } } } });
+    else $('#ch', el).parentElement.innerHTML = '<p class="muted small">Todavía no hay suficiente historial.</p>';
   });
 }
 
@@ -610,15 +658,25 @@ function editarItem(id, tipoDef, onDone){
     <div class="row"><div><label class="f">Tipo</label><select id="tipo">${['mp','envase','interno','producto'].map(t => `<option value="${t}" ${it.tipo===t?'selected':''}>${tipoTxt(t)}</option>`).join('')}</select></div>
     <div><label class="f">Unidad (la que fija el ingeniero)</label><input id="unidad" value="${esc(it.unidad||'')}" placeholder="KG, LT, UN"></div>
     <div><label class="f">Litros del envase</label><input inputmode="decimal" id="litros_envase" value="${it.litros_envase??''}" placeholder="solo envases"></div></div>
+    <div class="row" id="rowBase"><div style="flex:1 1 100%"><label class="f">Materia prima base (agrupa los códigos de distintos proveedores o variantes para el historial de precios y el stock)</label>
+      <input id="base" list="basesDL" value="${esc(it.mp_base_id ? (S.baseById[it.mp_base_id]||{}).nombre : '')}" placeholder="Ej.: DIÓXIDO DE TITANIO">
+      <datalist id="basesDL">${S.bases.map(b => `<option value="${esc(b.nombre)}">`).join('')}</datalist></div></div>
     <div class="row"><div><label class="f">Otros códigos (alias)</label><input id="alias" value="${esc(it.alias||'')}"></div>
     <div><label class="f">Stock mínimo</label><input inputmode="decimal" id="stock_minimo" value="${it.stock_minimo??''}"></div>
     <div><label class="f">Activo</label><select id="activo"><option value="1">Sí</option><option value="0" ${it.activo===false?'selected':''}>No</option></select></div></div>
     <div class="mfoot"><button class="btn sec" data-close>Cancelar</button><button class="btn" id="ok">Guardar</button></div>`, (el, close) => {
+    const tb = () => { $('#rowBase', el).style.display = $('#tipo', el).value === 'mp' ? '' : 'none'; }; $('#tipo', el).onchange = tb; tb();
     $('#ok', el).onclick = () => guard(async () => {
       const g = k => $('#'+k, el).value.trim();
       const rec = { codigo: g('codigo'), nombre: g('nombre'), tipo: g('tipo'), unidad: g('unidad').toUpperCase() || 'KG',
         litros_envase: num(g('litros_envase')), alias: g('alias') || null, stock_minimo: num(g('stock_minimo')), activo: g('activo') === '1' };
       if (!rec.codigo || !rec.nombre) throw new Error('Código y nombre son obligatorios');
+      const bn = g('base').toUpperCase();
+      if (rec.tipo === 'mp' && bn) {
+        let b = S.bases.find(x => x.nombre.toUpperCase() === bn);
+        if (!b) b = chk(await sb.from('mp_base').insert({ nombre: bn, unidad: rec.unidad }).select().single());
+        rec.mp_base_id = b.id;
+      } else if (rec.tipo !== 'mp') rec.mp_base_id = null;
       if (id) chk(await sb.from('items').update(rec).eq('id', id)); else chk(await sb.from('items').insert(rec));
       await recargarItems(); close(); toast('Guardado'); onDone && onDone();
     });
@@ -720,9 +778,9 @@ async function editorReceta(prodId, onDone){
 // =====================================================================
 let mesProd = mesActual();
 VISTAS.produccion = async app => {
-  app.innerHTML = `<h1>Producción</h1>
+  app.innerHTML = `<h1>Registro de Producción</h1>
     <div class="bar"><input type="month" id="mes" value="${mesProd}" style="max-width:180px"><input class="grow" id="q" placeholder="Buscar producto, nº, lote…">
-    ${can('produccion') ? '<button class="btn" id="nueva">+ Nueva partida</button>' : ''}<button class="btn sec" id="xlsMes">⬇ Excel del mes</button><button class="btn sec" onclick="window.print()">Imprimir</button></div>
+    ${can('produccion') ? '<button class="btn" id="nueva">+ Registro de Producción</button>' : ''}<button class="btn sec" id="xlsMes">⬇ Excel del mes</button><button class="btn sec" onclick="window.print()">Imprimir</button></div>
     <div class="printhead"><b>Uxell · Partidas fabricadas ${mesProd}</b></div>
     <div id="kp" class="grid" style="margin-bottom:10px"></div>
     <div class="card"><div class="tw" id="tabla"></div></div>`;
@@ -778,7 +836,7 @@ async function editorPartida(id){
   const cerrada = P.estado === 'cerrada';
   const ro = cerrada || !can('produccion');
   const baseTeor = Number(P.cant_teorica) || 1;
-  modal(`<h2>Partida ${P.nro} · ${esc(prod.codigo)} ${esc(prod.nombre)}</h2>
+  modal(`<h2>Registro de Producción · Partida ${P.nro}</h2><p style="margin-top:-6px"><b>${esc(prod.codigo)}</b> ${esc(prod.nombre)}</p>
     ${cerrada ? `<div class="alert ${P.origen==='app'?'info':''}">Partida cerrada${P.origen!=='app' ? ' (importada de las planillas)' : ''}. ${P.litros_estimados ? 'La planilla no tenía la cantidad real: se tomó la teórica.' : ''} ${isAdmin() && P.origen==='app' ? '<a href="#" id="reabrir">Reabrir</a>' : ''}</div>` : ''}
     ${P.nota ? `<p class="small muted">${esc(P.nota)}</p>` : ''}
     <div class="row">
@@ -960,16 +1018,25 @@ function imprimirPartida(P, prod, lineas, envases, c){
 VISTAS.stock = async app => {
   app.innerHTML = `<h1>Stock</h1>
     <div class="alert info small">El stock se calcula así: <b>stock inicial + compras recibidas − lo usado en cada partida ± ajustes manuales</b>. Mientras no se cargue el stock inicial de un insumo, su saldo no es confiable.</div>
-    <div class="bar"><div class="seg" id="seg"><button data-t="mp">Materias primas</button><button data-t="envase">Envases</button><button data-t="interno">Fabricación interna</button></div>
+    <div class="bar"><div class="seg" id="seg"><button data-t="base">Por materia prima base</button><button data-t="mp">Por código</button><button data-t="envase">Envases</button><button data-t="interno">Fabricación interna</button></div>
     <input class="grow" id="q" placeholder="Buscar…"><label class="small nowrap"><input type="checkbox" id="neg" style="width:auto"> Solo negativos</label>
     ${can('produccion') || can('compras') ? '<button class="btn sec" id="inv">Cargar inventario inicial</button>' : ''}<button class="btn sec" onclick="window.print()">Imprimir</button></div>
     <div class="printhead"><b>Uxell · Stock al ${fd(hoy())}</b></div>
     <div class="card"><div class="tw" id="tabla"></div></div>`;
-  const rows = await fetchAll(() => sb.from('v_stock').select('*').order('codigo'));
-  let tipo = 'mp';
+  const [rows, sbase] = await Promise.all([fetchAll(() => sb.from('v_stock').select('*').order('codigo')), fetchAll(() => sb.from('v_stock_base').select('*').order('nombre'))]);
+  let tipo = 'base';
   const draw = () => {
     $$('#seg button', app).forEach(b => b.classList.toggle('on', b.dataset.t === tipo));
     const q = $('#q', app).value.trim().toUpperCase(), neg = $('#neg', app).checked;
+    if (tipo === 'base') {
+      const f = sbase.filter(r => (!q || (r.nombre + ' ' + r.lista_codigos).toUpperCase().includes(q)) && (!neg || r.stock < 0));
+      $('#tabla', app).innerHTML = `<table><thead><tr><th>Materia prima</th><th class="hm">Códigos</th><th class="n">Stock</th><th>Unid</th><th>Estado</th></tr></thead><tbody>${
+        f.map(r => `<tr class="click" data-b="${r.mp_base_id}"><td><b>${esc(r.nombre)}</b></td><td class="hm small">${r.codigos > 1 ? `<span class="badge b-info">${r.codigos}</span> ` : ''}${esc(r.lista_codigos)}</td>
+          <td class="n" style="${r.stock<0?'color:var(--bad);font-weight:600':''}">${nf(r.stock,2)}</td><td>${esc(r.unidad)}</td>
+          <td>${!r.tiene_inicial ? '<span class="badge b-gray">sin inicial</span>' : r.stock < 0 ? '<span class="badge b-bad">negativo</span>' : '<span class="badge b-ok">ok</span>'}</td></tr>`).join('')}</tbody></table><p class="small muted">${f.length} materias primas</p>`;
+      $$('tr[data-b]', app).forEach(tr => tr.onclick = () => fichaBase(Number(tr.dataset.b)));
+      return;
+    }
     const f = rows.filter(r => r.tipo === tipo && (!q || (r.codigo + ' ' + r.nombre).toUpperCase().includes(q)) && (!neg || r.stock < 0));
     $('#tabla', app).innerHTML = `<table><thead><tr><th>Código</th><th>Nombre</th><th class="n">Stock</th><th>Unid</th><th class="n">Valor U$S</th><th>Estado</th><th>Último mov.</th></tr></thead><tbody>${
       f.map(r => { const v = S.val[r.item_id]; return `<tr class="click" data-id="${r.item_id}"><td><b>${esc(r.codigo)}</b></td><td>${esc(r.nombre)}</td>
@@ -982,7 +1049,7 @@ VISTAS.stock = async app => {
   };
   $$('#seg button', app).forEach(b => b.onclick = () => { tipo = b.dataset.t; draw(); });
   $('#q', app).oninput = draw; $('#neg', app).onchange = draw;
-  const inv = $('#inv', app); if (inv) inv.onclick = () => inventarioInicial(rows.filter(r => r.tipo === tipo), () => VISTAS.stock(app));
+  const inv = $('#inv', app); if (inv) inv.onclick = () => inventarioInicial(rows.filter(r => r.tipo === (tipo === 'base' ? 'mp' : tipo)), () => VISTAS.stock(app));
   draw();
 };
 
@@ -1210,17 +1277,19 @@ INF.precio = async el => {
   el.innerHTML = `<div class="bar"><button class="btn sec" id="pick">${iid ? esc(S.itemById[iid].codigo + ' · ' + S.itemById[iid].nombre) : 'Elegir insumo…'}</button>
     <input type="date" id="desde" style="max-width:170px" value="${new Date(Date.now()-3*365*864e5).toISOString().slice(0,10)}"><button class="btn sec" onclick="window.print()">Imprimir</button></div><div id="out"></div>`;
   $('#pick', el).onclick = async () => { const x = await pickItem({ tipos:['mp','envase','interno'], titulo:'Insumo' }); if (x) { VISTAS._evoIns = x.id; INF.precio(el); } };
-  if (!iid) { $('#out', el).innerHTML = '<p class="muted">Elegí un insumo para ver cómo evolucionó su precio (valuaciones, compras y lo usado en cada partida).</p>'; return; }
+  if (!iid) { $('#out', el).innerHTML = '<p class="muted">Elegí un insumo para ver cómo evolucionó su precio (valuaciones, compras y lo usado en cada partida). Si es parte de una materia prima base, se muestran todos sus códigos juntos.</p>'; return; }
+  const itx = S.itemById[iid], ids = itx.mp_base_id ? S.items.filter(i => i.mp_base_id === itx.mp_base_id).map(i => i.id) : [iid];
+  if (ids.length > 1) $('#pick', el).textContent = (S.baseById[itx.mp_base_id]?.nombre || '') + ` (${ids.length} códigos)`;
   const draw = async () => {
     const [h, c] = await Promise.all([
-      fetchAll(() => sb.from('v_precio_hist').select('*').eq('item_id', iid).gte('fecha', $('#desde', el).value).order('fecha')),
-      fetchAll(() => sb.from('compras').select('fecha,precio_unit_usd,costo_con_gastos_usd,cantidad,proveedor_id,moneda,precio_unit').eq('item_id', iid).gte('fecha', $('#desde', el).value).order('fecha')) ]);
+      fetchAll(() => sb.from('v_precio_hist').select('*').in('item_id', ids).gte('fecha', $('#desde', el).value).order('fecha')),
+      fetchAll(() => sb.from('compras').select('fecha,item_id,precio_unit_usd,costo_con_gastos_usd,cantidad,proveedor_id,moneda,precio_unit,lote_proveedor').in('item_id', ids).gte('fecha', $('#desde', el).value).order('fecha')) ]);
     const pmap = Object.fromEntries(S.prov.map(p => [p.id, p.nombre]));
     const porFecha = {}; h.filter(x => x.origen === 'partida').forEach(x => porFecha[x.fecha] = Number(x.costo_usd));
     const ser = Object.entries(porFecha).sort();
     $('#out', el).innerHTML = `<div class="card"><div class="chartbox"><canvas id="ch"></canvas></div></div>
-      <div class="card"><h3 style="margin-top:0">Compras</h3><div class="tw"><table><thead><tr><th>Fecha</th><th>Proveedor</th><th class="n">Cantidad</th><th class="n">Precio</th><th class="n">U$S/u</th></tr></thead><tbody>
-      ${c.slice().reverse().map(x => `<tr><td>${fd(x.fecha)}</td><td>${esc(pmap[x.proveedor_id]||'')}</td><td class="n">${nf(x.cantidad,0)}</td><td class="n">${x.moneda==='ARS'?'$':'U$S'} ${nf(x.precio_unit,2)}</td><td class="n">${nf(x.costo_con_gastos_usd ?? x.precio_unit_usd,4)}</td></tr>`).join('') || '<tr><td colspan=5 class="muted">Sin compras en el período</td></tr>'}</tbody></table></div></div>`;
+      <div class="card"><h3 style="margin-top:0">Compras</h3><div class="tw"><table><thead><tr><th>Fecha</th><th>Código</th><th>Proveedor</th><th class="n">Cantidad</th><th class="n">Precio</th><th class="n">U$S/u</th></tr></thead><tbody>
+      ${c.slice().reverse().map(x => `<tr><td>${fd(x.fecha)}</td><td>${esc(S.itemById[x.item_id]?.codigo)}${x.lote_proveedor ? ' · lote ' + esc(x.lote_proveedor) : ''}</td><td>${esc(pmap[x.proveedor_id]||'')}</td><td class="n">${nf(x.cantidad,0)}</td><td class="n">${x.moneda==='ARS'?'$':'U$S'} ${nf(x.precio_unit,2)}</td><td class="n">${nf(x.costo_con_gastos_usd ?? x.precio_unit_usd,4)}</td></tr>`).join('') || '<tr><td colspan=6 class="muted">Sin compras en el período</td></tr>'}</tbody></table></div></div>`;
     new Chart($('#ch', el), { type:'line', data:{ datasets:[
       { label:'Costo usado en partidas', data: ser.map(([f,v]) => ({x:f, y:v})), borderColor:'#6b2fd6', stepped:true, pointRadius:1 },
       { label:'Compras (U$S/u)', data: c.map(x => ({x:x.fecha, y: Number(x.costo_con_gastos_usd ?? x.precio_unit_usd)})), borderColor:'#e0a800', backgroundColor:'#e0a800', showLine:false, pointRadius:4 },
