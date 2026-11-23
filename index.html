@@ -131,8 +131,8 @@ tr.click:hover td{background:#faf8fe}
 // =====================================================================
 //  CONFIGURACIÓN — completar con los datos del proyecto Supabase de Uxell
 // =====================================================================
-const SUPABASE_URL = 'https://TU-PROYECTO.supabase.co';
-const SUPABASE_ANON_KEY = 'TU-CLAVE-PUBLICA';
+const SUPABASE_URL = 'https://rgvahqfdybonjwroqwsp.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_JgkZSgclP3J2m1Twoaf-oQ_FBGtJvo7';
 // =====================================================================
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -1196,6 +1196,9 @@ VISTAS.config = async app => {
     ${can('precios') ? `<div class="card"><h2 style="margin-top:0">Precios de venta del mes</h2>
       <p class="small muted">Subí un Excel con una columna de <b>código</b> y otra de <b>precio por litro</b> (en pesos). Se usan para comparar costo vs. precio en la lista de costos.</p>
       <div class="row"><div><label class="f">Mes</label><input type="month" id="pvMes" value="${mesActual()}"></div><div><label class="f">Archivo Excel</label><input type="file" id="pvFile" accept=".xlsx,.xls,.csv"></div></div><div id="pvOut"></div></div>` : ''}
+    ${isAdmin() && !S.items.length ? `<div class="card" style="border:2px solid var(--accent)"><h2 style="margin-top:0">Carga inicial de datos</h2>
+      <p class="small">La base está vacía. Elegí el archivo <b>carga_inicial.json</b> (está en la carpeta <i>Uxell Canvas › Uxell Costos › import</i>) para cargar insumos, recetas, compras y todas las partidas de las planillas. Tarda unos minutos: no cierres la página.</p>
+      <input type="file" id="ciFile" accept=".json"><div id="ciOut"></div></div>` : ''}
     ${isAdmin() ? `<div class="card"><h2 style="margin-top:0">Importar planilla mensual de partidas</h2>
       <p class="small muted">Para sumar meses que faltan (por ej. septiembre y octubre 2026). Elegí el archivo "PARTIDAS FABRICADAS …xlsx". Las partidas que ya existen no se duplican. No mueven stock.</p>
       <input type="file" id="ppFile" accept=".xlsx"><div id="ppOut"></div></div>
@@ -1205,6 +1208,7 @@ VISTAS.config = async app => {
   const pv = $('#pvFile', app); if (pv) pv.onchange = () => guard(() => importarPreciosVenta(pv.files[0], $('#pvMes', app).value, $('#pvOut', app)));
   const pp = $('#ppFile', app); if (pp) pp.onchange = () => guard(() => importarPartidasXLSX(pp.files[0], $('#ppOut', app)));
   const bk = $('#bk', app); if (bk) bk.onclick = () => guard(respaldo);
+  const ci = $('#ciFile', app); if (ci) ci.onchange = () => guard(() => cargaInicial(ci.files[0], $('#ciOut', app)));
   if (isAdmin()) {
     const us = chk(await sb.from('perfiles').select('*').order('creado_en'));
     const P = [['es_admin','Admin (todo)'],['p_compras','Compras'],['p_precios','Precios'],['p_recetas','Recetas'],['p_produccion','Producción'],['p_gastos','Gastos mes'],['activo','Activo']];
@@ -1305,6 +1309,38 @@ async function importarPartidasXLSX(file, out){
   }
   await recargarVal();
   out.innerHTML = `<div class="alert info">Listo: ${n} partidas importadas${salt ? `, ${salt} ya existían` : ''}.</div>${log.length ? `<details><summary>Avisos (${log.length})</summary><ul class="small">${log.map(l => `<li>${esc(l)}</li>`).join('')}</ul></details>` : ''}`;
+}
+
+
+// ---- Carga inicial desde el archivo generado a partir de las planillas
+async function cargaInicial(file, out){
+  if (!file) return;
+  const J = JSON.parse(await file.text());
+  const paso = t => { out.innerHTML = `<p><b>${t}</b></p><p class="small muted">No cierres esta página.</p>`; };
+  const lotes = async (tabla, filas, sel, tam=500) => { let res = [];
+    for (let i = 0; i < filas.length; i += tam) {
+      const q = sb.from(tabla).insert(filas.slice(i, i + tam));
+      const r = chk(sel ? await q.select(sel) : await q); if (sel) res = res.concat(r);
+      paso(`${tabla}: ${Math.min(i + tam, filas.length)} / ${filas.length}`);
+    } return res; };
+  if ((await sb.from('items').select('id', { count:'exact', head:true })).count) throw new Error('La base ya tiene datos: la carga inicial solo se hace una vez.');
+  paso('Cotizaciones…');
+  for (let i = 0; i < J.cotizaciones.length; i += 500) chk(await sb.from('cotizaciones').upsert(J.cotizaciones.slice(i, i+500).map(([fecha, valor]) => ({ fecha, valor, fuente:'Planillas Uxell' }))));
+  const prov = Object.fromEntries((await lotes('proveedores', J.proveedores.map(nombre => ({ nombre })), 'id,nombre')).map(p => [p.nombre, p.id]));
+  const it = Object.fromEntries((await lotes('items', J.items, 'id,codigo')).map(i => [i.codigo, i.id]));
+  await lotes('valuaciones', J.valuaciones.map(([c, fecha, costo_usd, cotizacion, nota]) => ({ item_id: it[c], fecha, costo_usd, cotizacion, origen:'importacion', nota })));
+  await lotes('recetas', J.recetas.map(([c, cant_teorica, merma_pct, notas]) => ({ producto_id: it[c], cant_teorica, merma_pct, notas })));
+  await lotes('receta_lineas', J.recetas.flatMap(([c,,,, ls]) => ls.map(([ins, cantidad], orden) => ({ producto_id: it[c], insumo_id: it[ins], cantidad, orden }))), null, 1000);
+  await lotes('compras', J.compras.map(({ item, prov: p, ...c }) => ({ ...c, item_id: it[item], proveedor_id: p ? prov[p] : null, origen:'importacion' })));
+  const parts = J.partidas.map(({ prod, ins, env, ...p }) => ({ ...p, producto_id: it[prod], estado:'borrador' }));
+  const pid = Object.fromEntries((await lotes('partidas', parts, 'id,nro')).map(p => [p.nro, p.id]));
+  await lotes('partida_insumos', J.partidas.flatMap(p => p.ins.map(([c, cantidad, costo_unit_usd, orden]) => ({ partida_id: pid[p.nro], insumo_id: it[c], cantidad, costo_unit_usd, fecha_valuacion: p.fecha, origen_valuacion:'planilla', orden }))), null, 1000);
+  await lotes('partida_envases', J.partidas.flatMap(p => p.env.map(([c, cantidad, costo_unit_usd]) => ({ partida_id: pid[p.nro], envase_id: it[c], cantidad, costo_unit_usd }))), null, 1000);
+  let r;
+  do { r = chk(await sb.rpc('finalizar_carga_inicial', { p_lote: 250 })); paso(`Calculando costos de las partidas… faltan ${r.quedan}`); } while (r.quedan > 0);
+  await cargarBase();
+  out.innerHTML = `<div class="alert info">Carga inicial terminada: ${J.items.length} items, ${J.recetas.length} recetas, ${J.compras.length} compras y ${J.partidas.length} partidas.</div>`;
+  toast('Carga inicial terminada');
 }
 
 async function respaldo(){

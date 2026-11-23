@@ -1,0 +1,15 @@
+name: Mantener activa la base de datos
+on:
+  schedule:
+    - cron: "23 11 * * *"   # 8:23 de Argentina
+    - cron: "53 23 * * *"   # 20:53 de Argentina
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Registrar actividad en Supabase
+        run: |
+          curl -fsS -X POST "https://rgvahqfdybonjwroqwsp.supabase.co/rest/v1/rpc/latido" \
+            -H "apikey: sb_publishable_JgkZSgclP3J2m1Twoaf-oQ_FBGtJvo7" \
+            -H "Content-Type: application/json" -d '{}' -w "\nHTTP %{http_code}\n"
