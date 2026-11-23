@@ -284,7 +284,7 @@ const RUTAS = [
   { id:'produccion', ic:'🧪', t:'Reg. Producción' },
   { id:'recetas',    ic:'📋', t:'Recetas' },
   { id:'stock',      ic:'📦', t:'Stock' },
-  { id:'gastos',     ic:'⚡', t:'Gastos mes' },
+  { id:'gastos',     ic:'⚡', t:'Gastos directos de Fábrica' },
   { id:'informes',   ic:'📊', t:'Informes' },
   { id:'config',     ic:'⚙️', t:'Ajustes' },
 ];
@@ -328,6 +328,8 @@ VISTAS.inicio = async app => {
     sb.from('v_consumo_mes_base').select('*').eq('periodo', mesIni).order('usd', { ascending:false }).limit(10),
     fetchAll(() => sb.from('v_stock_base').select('*').order('nombre')) ]);
   const borradores = chk(borr), M = chk(meses), PM = chk(prodMes), CM = chk(consMes);
+  const [gfMes, gfTot, gfConc] = await Promise.all([sb.from('gastos_fabrica').select('*').eq('periodo', mesIni).order('id'), sb.from('v_gastos_fabrica_mes').select('*').eq('periodo', mesIni).maybeSingle(), conceptosGasto()]);
+  const GFm = chk(gfMes), GFt = gfTot.data, gcm = Object.fromEntries(gfConc.map(c => [c.id, c]));
   const viejos = rev.filter(r => r.tipo !== 'interno' && (r.dias == null || r.dias > 60)).sort((a,b) => (b.dias ?? 99999) - (a.dias ?? 99999));
   const neg = stock.filter(r => r.stock < 0);
   const lista5 = []; for (let i = 4; i >= 0; i--) { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i); lista5.push(d.toISOString().slice(0,7) + '-01'); }
@@ -348,7 +350,7 @@ VISTAS.inicio = async app => {
     </div>
     ${S.dolarFecha !== hoy() ? `<div class="alert info">El dólar cargado es del ${fd(S.dolarFecha)}. <a href="#" id="actDolar">Actualizar dólar de hoy</a></div>` : ''}
     ${borradores.length ? `<div class="alert">Hay ${borradores.length} partida(s) en borrador sin cerrar: ${borradores.map(b => `<a href="#produccion" data-p="${b.id}">#${b.nro}</a>`).join(', ')}</div>` : ''}
-    ${!gm.data && new Date().getDate() > 25 ? `<div class="alert info">Todavía no se cargaron los gastos de ${nombreMes}. <a href="#gastos">Cargar gastos del mes</a></div>` : ''}
+    ${!gm.data && new Date().getDate() > 25 ? `<div class="alert info">Todavía no se cargaron los Gastos directos de Fábrica de ${nombreMes}. <a href="#gastos">Cargarlos</a></div>` : ''}
     <div class="row noprint" style="margin-bottom:12px">
       ${can('compras') ? '<button class="btn" onclick="location.hash=\'compras\';setTimeout(()=>nuevaCompra(),300)">+ Nueva compra</button>' : ''}
       ${can('produccion') ? '<button class="btn" onclick="location.hash=\'produccion\';setTimeout(()=>editorPartida(null),300)">+ Registro de Producción</button>' : ''}
@@ -361,6 +363,12 @@ VISTAS.inicio = async app => {
       <div class="card"><h2>Materias primas más utilizadas en ${nombreMes}</h2>
         ${CM.length ? `<div class="minitw"><table><thead><tr><th>Materia prima</th><th class="n">Cantidad</th><th class="n">U$S</th></tr></thead><tbody>${CM.map(c =>
           `<tr><td><b>${esc(c.nombre)}</b> <span class="small muted">${esc(c.codigos)}</span></td><td class="n">${nf(c.cantidad,0)} ${esc(c.unidad||'')}</td><td class="n">${nf(c.usd,0)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted small">Todavía no hay consumos este mes.</p>'}</div>
+      <div class="card"><h2>Gastos directos de Fábrica · ${nombreMes}</h2>
+        ${GFm.length ? `<div class="minitw"><table><thead><tr><th>Egreso</th><th class="n">Total $</th><th class="n">%</th><th class="n">Asignado $</th></tr></thead><tbody>
+          ${GFm.sort((a, b) => (gcm[a.concepto_id]?.orden ?? 999) - (gcm[b.concepto_id]?.orden ?? 999)).map(g => `<tr><td><b>${esc(gcm[g.concepto_id]?.nombre)}</b>${g.detalle ? ` <span class="small muted">${esc(g.detalle)}</span>` : ''}</td><td class="n">${nf(g.importe_ars,0)}</td><td class="n">${pctTxt(g.pct_asignacion)}</td><td class="n">${nf(g.importe_asignado_ars,0)}</td></tr>`).join('')}
+          <tr><td><b>TOTAL</b></td><td class="n"><b>${nf(GFt?.total_ars,0)}</b></td><td></td><td class="n"><b>${nf(GFt?.asignado_ars,0)}</b></td></tr></tbody></table></div>
+          <p class="small" style="margin:6px 0 0">Por litro: <b>${GFt?.ars_lt ? ars(GFt.ars_lt, 2) : '—'}</b>${GFt?.usd_lt ? ' · ' + usd(GFt.usd_lt, 4) : ''} · <a href="#gastos">Ver / cargar</a></p>`
+          : `<p class="muted small">Todavía no se cargaron gastos este mes. <a href="#gastos">Cargar Gastos directos de Fábrica</a></p>`}</div>
       <div class="card"><h2>Precios con más de 60 días sin actualizar <span class="badge b-bad">${viejos.length}</span></h2>
         ${viejos.length ? `<div class="minitw"><table><thead><tr><th>Insumo / envase</th><th class="n">U$S</th><th>Última valuación</th></tr></thead><tbody>${viejos.map(r => `<tr class="click" data-v="${r.item_id}"><td><b>${esc(r.codigo)}</b> <span class="small">${esc(r.nombre)}</span></td><td class="n">${nf(r.costo_usd,3)}</td><td class="nowrap">${r.fecha ? fd(r.fecha) : ''} ${edadBadge(r.dias)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="small" style="color:var(--ok)">Todos los precios están actualizados ✅</p>'}</div>
       <div class="card"><h2>Stock de materias primas ${neg.length ? `<span class="badge b-bad">${neg.length} negativos</span>` : ''}</h2>
@@ -867,7 +875,7 @@ async function editorPartida(id){
       <div><label class="f">Energía (U$S)</label><input inputmode="decimal" id="energia_usd" value="${P.energia_usd||0}" ${ro?'readonly':''}></div>
       <div><label class="f">Accesorios / otros (U$S)</label><input inputmode="decimal" id="accesorios_usd" value="${P.accesorios_usd||0}" ${ro?'readonly':''}></div>
     </div>
-    <p class="small muted">Las horas hombre se valorizan a fin de mes con el valor hora y el % de cargas sociales de "Gastos del mes".</p>
+    <p class="small muted">Las horas hombre son informativas. La mano de obra, cargas sociales, energía y mantenimiento se cargan en "Gastos directos de Fábrica" y se reparten por litro.</p>
     <div class="card" style="background:#f7f3ff" id="res"></div>
     <div class="mfoot">
       <button class="btn sec" id="imp">Imprimir</button>
@@ -927,7 +935,7 @@ async function editorPartida(id){
         <div class="tot"><span>En pesos (granel / con envase)</span><b>${ars(c.granelLt*d)} / ${ars(c.envLtCosto*d)}</b></div>
         ${teor && Math.abs(c.lt/teor - 1) > 0.03 ? `<div class="small" style="color:var(--warn);margin-top:6px">Rendimiento ${nf(c.lt/teor*100,1)}% de lo teórico. Si se calculara sobre la teórica daría ${usd(c.granel/teor,4)}/lt.</div>` : ''}
         ${cerrada && P.costo_excel_lt_usd ? `<div class="small muted" style="margin-top:6px">La planilla original decía ${usd(P.costo_excel_lt_usd,4)}/lt (calculado sobre la cantidad teórica).</div>` : ''}
-        <div class="small muted" style="margin-top:6px">③ El costo con gastos del mes (horas hombre, luz, materiales) se ve en Informes → Lista de costos una vez cargados los gastos del mes.</div>`}`;
+        <div class="small muted" style="margin-top:6px">③ El costo con Gastos directos de Fábrica se ve en Informes → Lista de costos una vez cargados los gastos del mes.</div>`}`;
     };
     $$('input', el).forEach(i => i.addEventListener('input', res));
     drawL(); drawE();
@@ -1100,53 +1108,239 @@ function inventarioInicial(rows, onDone){
 // =====================================================================
 //  GASTOS DEL MES
 // =====================================================================
+// =====================================================================
+//  GASTOS DIRECTOS DE FÁBRICA
+// =====================================================================
+let gTab = 'mes';
+const finMes = m => { const [y, mm] = m.split('-').map(Number); return new Date(y, mm, 1).toISOString().slice(0,10); };
+const nomMesLargo = p => new Date(p.slice(0,7) + '-15T12:00').toLocaleDateString('es-AR', { month:'long', year:'numeric' });
+const pctTxt = v => nf(Number(v) * 100, Number(v) * 100 % 1 ? 1 : 0) + '%';
+
 VISTAS.gastos = async app => {
-  const per = (VISTAS._mesG || mesActual());
-  const g = (await sb.from('gastos_mes').select('*').eq('periodo', per + '-01').maybeSingle()).data || { cargas_pct: 0.40, sueldos_ars:0, luz_ars:0, materiales_ars:0, otros_ars:0 };
-  const mp = (await sb.from('v_mes_produccion').select('*').eq('periodo', per + '-01').maybeSingle()).data || { litros:0, horas:0, partidas:0 };
+  app.innerHTML = `<h1>Gastos directos de Fábrica</h1>
+    <p class="muted small" style="margin-top:-6px">Se carga cada egreso del mes. En energía y mantenimiento se indica el % que corresponde a la fábrica. Lo asignado se reparte por litro fabricado (incluye lo producido para uso interno) y da el costo ③.</p>
+    <div class="seg noprint" id="segG"><button data-t="mes">Carga del mes</button><button data-t="comparar">Comparar períodos</button><button data-t="egresos">Listado por egreso</button></div>
+    <div id="gOut" style="margin-top:12px"></div>`;
+  $$('#segG button', app).forEach(b => { b.classList.toggle('on', b.dataset.t === gTab); b.onclick = () => { gTab = b.dataset.t; VISTAS.gastos(app); }; });
+  await GT[gTab]($('#gOut', app));
+};
+const GT = {};
+
+async function conceptosGasto(){ return chk(await sb.from('conceptos_gasto').select('*').order('orden').order('nombre')); }
+
+GT.mes = async el => {
+  const per = VISTAS._mesG || mesActual(), p1 = per + '-01';
   const ro = !can('gastos');
-  app.innerHTML = `<h1>Gastos del mes</h1>
-    <p class="muted small" style="margin-top:-6px">Se cargan a fin de mes. Los gastos se reparten por litro fabricado (incluye lo producido para uso interno). Las horas hombre de cada partida se valorizan con el valor hora más las cargas sociales.</p>
+  const [conc, filas, tot, mp, gm] = await Promise.all([
+    conceptosGasto(),
+    sb.from('gastos_fabrica').select('*').eq('periodo', p1).order('id'),
+    sb.from('v_gastos_fabrica_mes').select('*').eq('periodo', p1).maybeSingle(),
+    sb.from('v_mes_produccion').select('*').eq('periodo', p1).maybeSingle(),
+    sb.from('gastos_mes').select('*').eq('periodo', p1).maybeSingle() ]);
+  const G = chk(filas), T = tot.data, M = mp.data || { litros:0, partidas:0 }, GM = gm.data || {};
+  const cmap = Object.fromEntries(conc.map(c => [c.id, c]));
+  const cot = num(GM.cotizacion) || (T && T.cotizacion) || S.dolar;
+  const orden = G.slice().sort((a, b) => (cmap[a.concepto_id]?.orden ?? 999) - (cmap[b.concepto_id]?.orden ?? 999) || a.id - b.id);
+  const totalFact = G.reduce((s, g) => s + Number(g.importe_ars), 0), totalAsig = G.reduce((s, g) => s + Number(g.importe_asignado_ars), 0);
+  el.innerHTML = `
     <div class="card">
-      <div class="row"><div><label class="f">Mes</label><input type="month" id="mes" value="${per}"></div>
-      <div><label class="f">Dólar BNA de cierre</label><input inputmode="decimal" id="cotizacion" value="${g.cotizacion ?? S.dolar ?? ''}" ${ro?'readonly':''}></div></div>
-      <h3>Mano de obra</h3>
       <div class="row">
-        <div><label class="f">Sueldos de producción del mes ($, sin cargas)</label><input inputmode="decimal" id="sueldos_ars" value="${g.sueldos_ars}" ${ro?'readonly':''}></div>
-        <div><label class="f">Cargas sociales %</label><input inputmode="decimal" id="cargas" value="${nf(g.cargas_pct*100,1)}" ${ro?'readonly':''}></div>
-        <div><label class="f">Valor hora ($) — vacío = sueldos ÷ horas</label><input inputmode="decimal" id="valor_hora_ars" value="${g.valor_hora_ars ?? ''}" ${ro?'readonly':''}></div>
+        <div><label class="f">Mes</label><input type="month" id="mes" value="${per}"></div>
+        <div><label class="f">Dólar BNA del mes (para pasar a U$S)</label><input inputmode="decimal" id="cot" value="${GM.cotizacion ?? ''}" placeholder="${cot ? nf(cot,2) + ' (automático)' : ''}" ${ro ? 'readonly' : ''}></div>
+        ${ro ? '' : `<div style="flex:0 0 auto"><label class="f">&nbsp;</label><label class="small nowrap"><input type="checkbox" id="cerrado" style="width:auto" ${GM.cerrado ? 'checked' : ''}> Mes cerrado</label></div>`}
       </div>
-      <h3>Otros gastos directos</h3>
-      <div class="row">
-        <div><label class="f">Luz / energía ($)</label><input inputmode="decimal" id="luz_ars" value="${g.luz_ars}" ${ro?'readonly':''}></div>
-        <div><label class="f">Materiales directos ($)</label><input inputmode="decimal" id="materiales_ars" value="${g.materiales_ars}" ${ro?'readonly':''}></div>
-        <div><label class="f">Otros ($)</label><input inputmode="decimal" id="otros_ars" value="${g.otros_ars}" ${ro?'readonly':''}></div>
-      </div>
-      <label class="f">Nota</label><input id="nota" value="${esc(g.nota||'')}" ${ro?'readonly':''}>
-      <div class="card" style="background:#f7f3ff;margin-top:12px" id="calc"></div>
-      ${ro ? '' : `<div class="mfoot"><label class="small"><input type="checkbox" id="cerrado" style="width:auto" ${g.cerrado?'checked':''}> Mes cerrado</label><button class="btn" id="ok">Guardar</button></div>`}
+    </div>
+    <div class="card">
+      <div class="bar"><h2 style="margin:0;flex:1">Egresos de ${nomMesLargo(p1)}</h2>
+        ${ro ? '' : `<button class="btn sm" id="add">+ Agregar gasto</button><button class="btn sec sm" id="copiar">Traer los del mes anterior</button><button class="btn sec sm" id="conc">Conceptos</button><button class="btn sec sm" id="imp">Importar Excel</button>`}</div>
+      <div class="tw"><table><thead><tr><th>Concepto</th><th>Detalle</th><th class="hm">Comprobante</th><th class="n">Importe total $</th><th class="n">% fábrica</th><th class="n">Asignado $</th><th></th></tr></thead><tbody>
+      ${orden.map(g => `<tr ${ro ? '' : `class="click" data-g="${g.id}"`}><td><b>${esc(cmap[g.concepto_id]?.nombre || '?')}</b></td><td>${esc(g.detalle || '')}</td><td class="hm small">${esc(g.comprobante || '')}</td>
+        <td class="n">${nf(g.importe_ars,2)}</td><td class="n">${pctTxt(g.pct_asignacion)}</td><td class="n"><b>${nf(g.importe_asignado_ars,2)}</b></td><td>${ro ? '' : `<button class="btn ghost sm" data-del="${g.id}">✕</button>`}</td></tr>`).join('')
+        || '<tr><td colspan=7 class="muted">Todavía no hay gastos cargados en este mes.</td></tr>'}
+      ${G.length ? `<tr><td colspan=3><b>TOTAL</b></td><td class="n"><b>${nf(totalFact,2)}</b></td><td></td><td class="n"><b>${nf(totalAsig,2)}</b></td><td></td></tr>` : ''}
+      </tbody></table></div>
+    </div>
+    <div class="card" style="background:#f7f3ff">
+      <div class="tot"><span>Total asignado a fábrica</span><b>${ars(totalAsig)}${cot ? ' · ' + usd(totalAsig / cot, 2) : ''}</b></div>
+      <div class="tot"><span>Litros fabricados en el mes (${M.partidas} partidas)</span><b>${nf(M.litros,0)} lt</b></div>
+      <div class="tot"><span>Gastos directos de fábrica por litro</span><b class="big">${M.litros > 0 ? ars(totalAsig / M.litros, 2) : '—'}${M.litros > 0 && cot ? ' · ' + usd(totalAsig / cot / M.litros, 4) : ''}</b></div>
+      ${M.litros > 0 ? '' : '<p class="small muted">Cuando haya partidas cerradas en el mes se calcula el costo por litro.</p>'}
     </div>`;
-  const v = k => num($('#'+k, app).value) || 0;
-  const calc = () => {
-    const cot = v('cotizacion'), cargas = v('cargas')/100;
-    const vh = v('valor_hora_ars') || (mp.horas > 0 ? v('sueldos_ars') / mp.horas : 0);
-    const gx = v('luz_ars') + v('materiales_ars') + v('otros_ars');
-    $('#calc', app).innerHTML = `
-      <div class="tot"><span>Partidas cerradas / litros fabricados</span><b>${mp.partidas} / ${nf(mp.litros,0)} lt</b></div>
-      <div class="tot"><span>Horas hombre cargadas en partidas</span><b>${nf(mp.horas,1)} h</b></div>
-      <div class="tot"><span>Valor hora con cargas</span><b>${ars(vh*(1+cargas))}${cot ? ' · ' + usd(vh*(1+cargas)/cot,2) : ''}</b></div>
-      <div class="tot"><span>Mano de obra total del mes</span><b>${ars(vh*(1+cargas)*mp.horas)}</b></div>
-      <div class="tot"><span>Otros gastos por litro</span><b>${mp.litros ? ars(gx/mp.litros,2) + (cot ? ' · ' + usd(gx/mp.litros/cot,4) : '') : '—'}</b></div>
-      ${!mp.horas && v('sueldos_ars') ? '<div class="alert" style="margin-top:8px">No hay horas hombre cargadas en las partidas de este mes: sin horas no se puede repartir el sueldo. Cargá las horas en cada partida o un valor hora fijo.</div>' : ''}`;
-  };
-  $$('input', app).forEach(i => i.addEventListener('input', calc)); calc();
-  $('#mes', app).onchange = e => { VISTAS._mesG = e.target.value; VISTAS.gastos(app); };
-  const ok = $('#ok', app); if (ok) ok.onclick = () => guard(async () => {
-    chk(await sb.from('gastos_mes').upsert({ periodo: $('#mes', app).value + '-01', sueldos_ars: v('sueldos_ars'), cargas_pct: v('cargas')/100,
-      valor_hora_ars: num($('#valor_hora_ars', app).value), luz_ars: v('luz_ars'), materiales_ars: v('materiales_ars'), otros_ars: v('otros_ars'),
-      cotizacion: num($('#cotizacion', app).value), cerrado: $('#cerrado', app).checked, nota: $('#nota', app).value || null, actualizado_en: new Date().toISOString() }));
-    toast('Gastos del mes guardados');
+  $('#mes', el).onchange = e => { VISTAS._mesG = e.target.value; GT.mes(el); };
+  if (ro) return;
+  const guardarMes = () => guard(async () => { chk(await sb.from('gastos_mes').upsert({ periodo: p1, cotizacion: num($('#cot', el).value), cerrado: $('#cerrado', el).checked, actualizado_en: new Date().toISOString() })); toast('Guardado'); GT.mes(el); });
+  $('#cot', el).onchange = guardarMes; $('#cerrado', el).onchange = guardarMes;
+  $('#add', el).onclick = () => editarGasto(null, p1, conc, () => GT.mes(el));
+  $$('[data-g]', el).forEach(tr => tr.onclick = e => { if (e.target.closest('[data-del]')) return; editarGasto(G.find(g => g.id === Number(tr.dataset.g)), p1, conc, () => GT.mes(el)); });
+  $$('[data-del]', el).forEach(b => b.onclick = async e => { e.stopPropagation(); if (await confirmar('¿Eliminar este gasto?', 'Eliminar')) guard(async () => { chk(await sb.from('gastos_fabrica').delete().eq('id', Number(b.dataset.del))); GT.mes(el); }); });
+  $('#conc', el).onclick = () => editarConceptos(() => GT.mes(el));
+  $('#imp', el).onclick = () => importarGastosModal(() => GT.mes(el));
+  $('#copiar', el).onclick = () => guard(async () => {
+    const d = new Date(p1 + 'T12:00'); d.setMonth(d.getMonth() - 1); const ant = d.toISOString().slice(0,7) + '-01';
+    const prev = chk(await sb.from('gastos_fabrica').select('concepto_id,detalle,importe_ars,pct_asignacion').eq('periodo', ant));
+    if (!prev.length) throw new Error('El mes anterior no tiene gastos cargados');
+    if (!(await confirmar(`Se copian ${prev.length} gastos de ${nomMesLargo(ant)} con sus importes, para que solo tengas que corregirlos. ¿Seguir?`))) return;
+    chk(await sb.from('gastos_fabrica').insert(prev.map(x => ({ ...x, periodo: p1 }))));
+    toast('Gastos copiados: revisá los importes'); GT.mes(el);
   });
+};
+
+function editarGasto(g, p1, conc, onDone){
+  const activos = conc.filter(c => c.activo || (g && c.id === g.concepto_id));
+  modal(`<h2>${g ? 'Editar gasto' : 'Agregar gasto'} · ${nomMesLargo(p1)}</h2>
+    <div class="row"><div style="flex:2 1 240px"><label class="f">Concepto</label><select id="c">${activos.map(c => `<option value="${c.id}" ${g && g.concepto_id === c.id ? 'selected' : ''}>${esc(c.nombre)}</option>`).join('')}<option value="nuevo">+ Nuevo concepto…</option></select></div>
+      <div id="nc" style="display:none;flex:2 1 240px"><label class="f">Nombre del nuevo concepto</label><input id="ncn" placeholder="Ej.: GAS, AGUA, SEGURIDAD"></div></div>
+    <div class="row"><div style="flex:2 1 240px"><label class="f">Detalle (opcional)</label><input id="d" value="${esc(g?.detalle || '')}" placeholder="Ej.: factura Edenor, service mezcladora"></div>
+      <div><label class="f">Comprobante (opcional)</label><input id="comp" value="${esc(g?.comprobante || '')}"></div></div>
+    <div class="row"><div><label class="f">Importe total ($)</label><input inputmode="decimal" id="imp" value="${g ? g.importe_ars : ''}"></div>
+      <div id="pw"><label class="f">% asignado a fábrica</label><input inputmode="decimal" id="pct" value="${g ? nf(g.pct_asignacion * 100, 2) : ''}"></div></div>
+    <div class="card" style="background:#f7f3ff;margin-top:10px" id="calc"></div>
+    <div class="mfoot"><button class="btn sec" data-close>Cancelar</button><button class="btn" id="ok">Guardar</button></div>`, (el, close) => {
+    const cSel = () => conc.find(c => c.id === Number($('#c', el).value));
+    const upd = () => { const nuevo = $('#c', el).value === 'nuevo'; $('#nc', el).style.display = nuevo ? '' : 'none';
+      const c = cSel(); const usa = nuevo || (c && c.usa_porcentaje); $('#pw', el).style.display = usa ? '' : 'none';
+      if (usa && !$('#pct', el).value) $('#pct', el).value = nf((c ? c.pct_default : 1) * 100, 2);
+      const imp = num($('#imp', el).value) || 0, pct = usa ? (num($('#pct', el).value) ?? 100) / 100 : 1;
+      $('#calc', el).innerHTML = `<div class="tot"><span>Asignado a fábrica</span><b class="big">${ars(imp * pct)}</b></div>`; };
+    $('#c', el).onchange = () => { $('#pct', el).value = ''; upd(); }; $$('input', el).forEach(i => i.addEventListener('input', upd)); upd();
+    $('#ok', el).onclick = () => guard(async () => {
+      let cid = $('#c', el).value, c = cSel();
+      if (cid === 'nuevo') { const n = $('#ncn', el).value.trim().toUpperCase(); if (!n) throw new Error('Escribí el nombre del concepto');
+        c = chk(await sb.from('conceptos_gasto').insert({ nombre: n, usa_porcentaje: true, pct_default: 1, orden: 60 }).select().single()); cid = c.id; }
+      const imp = num($('#imp', el).value); if (imp == null) throw new Error('Ingresá el importe');
+      const usa = c.usa_porcentaje; const pct = usa ? (num($('#pct', el).value) ?? 100) / 100 : 1;
+      if (pct < 0 || pct > 1) throw new Error('El porcentaje tiene que estar entre 0 y 100');
+      const rec = { periodo: p1, concepto_id: Number(cid), detalle: $('#d', el).value.trim() || null, comprobante: $('#comp', el).value.trim() || null, importe_ars: imp, pct_asignacion: pct };
+      if (g) chk(await sb.from('gastos_fabrica').update(rec).eq('id', g.id)); else chk(await sb.from('gastos_fabrica').insert(rec));
+      close(); toast('Gasto guardado'); onDone && onDone();
+    });
+  });
+}
+
+async function editarConceptos(onDone){
+  const conc = await conceptosGasto();
+  modal(`<h2>Conceptos de gasto</h2><p class="small muted">"Lleva %" es para gastos que se comparten con otras áreas (por ejemplo, la factura de luz): al cargarlos se pide qué porcentaje corresponde a la fábrica.</p>
+    <div class="tw"><table class="ln"><thead><tr><th>Concepto</th><th>Lleva %</th><th class="n">% sugerido</th><th>Activo</th></tr></thead><tbody>
+    ${conc.map(c => `<tr data-c="${c.id}"><td><input data-k="nombre" value="${esc(c.nombre)}"></td><td><input type="checkbox" data-k="usa_porcentaje" style="width:auto" ${c.usa_porcentaje ? 'checked' : ''}></td>
+      <td class="n"><input data-k="pct_default" inputmode="decimal" value="${nf(c.pct_default * 100, 2)}" style="width:80px;text-align:right"></td><td><input type="checkbox" data-k="activo" style="width:auto" ${c.activo ? 'checked' : ''}></td></tr>`).join('')}
+    <tr data-c="nuevo"><td><input data-k="nombre" placeholder="+ Nuevo concepto"></td><td><input type="checkbox" data-k="usa_porcentaje" style="width:auto"></td><td class="n"><input data-k="pct_default" inputmode="decimal" value="100" style="width:80px;text-align:right"></td><td><input type="checkbox" data-k="activo" style="width:auto" checked></td></tr>
+    </tbody></table></div>
+    <div class="mfoot"><button class="btn sec" data-close>Cerrar</button><button class="btn" id="ok">Guardar</button></div>`, (el, close) => {
+    $('#ok', el).onclick = () => guard(async () => {
+      for (const tr of $$('tr[data-c]', el)) {
+        const v = k => $(`[data-k="${k}"]`, tr); const nombre = v('nombre').value.trim().toUpperCase();
+        const rec = { nombre, usa_porcentaje: v('usa_porcentaje').checked, pct_default: Math.min(1, Math.max(0, (num(v('pct_default').value) ?? 100) / 100)), activo: v('activo').checked };
+        if (tr.dataset.c === 'nuevo') { if (nombre) chk(await sb.from('conceptos_gasto').insert({ ...rec, orden: 60 })); }
+        else if (nombre) chk(await sb.from('conceptos_gasto').update(rec).eq('id', Number(tr.dataset.c)));
+      }
+      close(); toast('Conceptos guardados'); onDone && onDone();
+    });
+  });
+}
+
+function importarGastosModal(onDone){
+  modal(`<h2>Importar gastos de meses anteriores</h2>
+    <p class="small">Subí un Excel con estas columnas (en la primera hoja, con títulos en la primera fila):</p>
+    <p class="small"><b>Mes</b> (ej. 2025-03 o una fecha) · <b>Concepto</b> · <b>Importe</b> · <b>%</b> (opcional, % asignado a fábrica) · <b>Detalle</b> (opcional)</p>
+    <p class="small muted">Si un concepto no existe se crea. Sirve para cargar los meses viejos y poder compararlos.</p>
+    <input type="file" id="f" accept=".xlsx,.xls,.csv"><div id="out"></div>
+    <div class="mfoot"><button class="btn sec" data-close>Cerrar</button></div>`, (el, close) => {
+    $('#f', el).onchange = () => guard(async () => {
+      const wb = await leerExcel($('#f', el).files[0]);
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header:1, raw:true, defval:null });
+      const h = (rows[0] || []).map(x => String(x || '').trim().toUpperCase());
+      const ix = re => h.findIndex(x => re.test(x));
+      const iM = ix(/^MES|PERIODO|FECHA/), iC = ix(/CONCEPTO/), iI = ix(/IMPORTE|MONTO/), iP = ix(/%|PORC|ASIGN/), iD = ix(/DETALLE|DESCRIP/);
+      if (iM < 0 || iC < 0 || iI < 0) throw new Error('Faltan columnas: tienen que estar Mes, Concepto e Importe');
+      let conc = await conceptosGasto(); const ins = [], mal = [];
+      for (const r of rows.slice(1)) {
+        if (!r || r[iC] == null || r[iI] == null) continue;
+        let m = r[iM]; let per = null;
+        if (m instanceof Date) per = m.toISOString().slice(0,7);
+        else if (typeof m === 'number') per = new Date(Math.round((m - 25569) * 864e5)).toISOString().slice(0,7);
+        else { const t = String(m).trim(); let x = t.match(/^(\d{4})[-\/](\d{1,2})/) || null; if (x) per = x[1] + '-' + x[2].padStart(2,'0');
+          else { x = t.match(/^(\d{1,2})[-\/](\d{4})$/) || t.match(/^\d{1,2}[-\/](\d{1,2})[-\/](\d{4})$/); if (x) per = (x[2].length === 4 ? x[2] + '-' + x[1].padStart(2,'0') : null); } }
+        if (!per) { mal.push(String(m)); continue; }
+        const nombre = String(r[iC]).trim().toUpperCase();
+        let c = conc.find(x => x.nombre === nombre);
+        if (!c) { c = chk(await sb.from('conceptos_gasto').insert({ nombre, usa_porcentaje: iP >= 0, pct_default: 1, orden: 60 }).select().single()); conc.push(c); }
+        let pct = iP >= 0 && r[iP] != null ? num(r[iP]) : 1; if (pct > 1) pct = pct / 100;
+        ins.push({ periodo: per + '-01', concepto_id: c.id, importe_ars: num(r[iI]) || 0, pct_asignacion: pct ?? 1, detalle: iD >= 0 && r[iD] != null ? String(r[iD]) : 'Importado' });
+      }
+      for (let i = 0; i < ins.length; i += 500) chk(await sb.from('gastos_fabrica').insert(ins.slice(i, i + 500)));
+      $('#out', el).innerHTML = `<div class="alert info">${ins.length} gastos importados${mal.length ? `. No se entendió el mes en ${mal.length} filas.` : '.'}</div>`;
+      onDone && onDone();
+    });
+  });
+}
+
+GT.comparar = async el => {
+  const d0 = new Date(); d0.setDate(1); d0.setMonth(d0.getMonth() - 11);
+  const desde = VISTAS._gDesde || d0.toISOString().slice(0,7), hasta = VISTAS._gHasta || mesActual();
+  el.innerHTML = `<div class="bar"><label class="small">Desde</label><input type="month" id="d" value="${desde}" style="max-width:170px"><label class="small">Hasta</label><input type="month" id="h" value="${hasta}" style="max-width:170px">
+    <div class="seg" id="ver"><button data-v="asig" class="on">Importes asignados</button><button data-v="lt">$ por litro</button></div>
+    <button class="btn sec" id="xls">Excel</button><button class="btn sec" onclick="window.print()">Imprimir</button></div>
+    <div class="printhead"><b>Uxell · Gastos directos de Fábrica · ${desde} a ${hasta}</b></div><div id="out"></div>`;
+  const [conc, G, T] = await Promise.all([conceptosGasto(),
+    fetchAll(() => sb.from('gastos_fabrica').select('periodo,concepto_id,importe_ars,importe_asignado_ars').gte('periodo', desde + '-01').lte('periodo', hasta + '-01')),
+    fetchAll(() => sb.from('v_gastos_fabrica_mes').select('*').gte('periodo', desde + '-01').lte('periodo', hasta + '-01').order('periodo')) ]);
+  const meses = []; for (let d = new Date(desde + '-15'); d.toISOString().slice(0,7) <= hasta; d.setMonth(d.getMonth() + 1)) meses.push(d.toISOString().slice(0,7) + '-01');
+  const cmap = Object.fromEntries(conc.map(c => [c.id, c])), tmap = Object.fromEntries(T.map(t => [t.periodo, t]));
+  const usados = [...new Set(G.map(g => g.concepto_id))].sort((a, b) => (cmap[a]?.orden ?? 999) - (cmap[b]?.orden ?? 999));
+  const val = {}; G.forEach(g => { const k = g.concepto_id + '|' + g.periodo; val[k] = (val[k] || 0) + Number(g.importe_asignado_ars); });
+  let ver = 'asig';
+  const draw = () => {
+    $$('#ver button', el).forEach(b => b.classList.toggle('on', b.dataset.v === ver));
+    const cel = (c, p) => { const v = val[c + '|' + p]; if (!v) return ''; if (ver === 'asig') return nf(v, 0); const l = tmap[p]?.litros; return l > 0 ? nf(v / l, 2) : '—'; };
+    const nm = p => new Date(p + 'T12:00').toLocaleDateString('es-AR', { month:'short', year:'2-digit' });
+    $('#out', el).innerHTML = usados.length ? `<div class="card"><div class="chartbox"><canvas id="ch"></canvas></div></div>
+      <div class="card"><div class="tw"><table><thead><tr><th>Concepto</th>${meses.map(p => `<th class="n">${nm(p)}</th>`).join('')}</tr></thead><tbody>
+      ${usados.map(c => `<tr><td class="nowrap"><b>${esc(cmap[c]?.nombre)}</b></td>${meses.map(p => `<td class="n">${cel(c, p)}</td>`).join('')}</tr>`).join('')}
+      <tr><td><b>TOTAL ASIGNADO $</b></td>${meses.map(p => `<td class="n"><b>${tmap[p] ? nf(tmap[p].asignado_ars, 0) : ''}</b></td>`).join('')}</tr>
+      <tr><td>Litros fabricados</td>${meses.map(p => `<td class="n">${tmap[p] ? nf(tmap[p].litros, 0) : ''}</td>`).join('')}</tr>
+      <tr><td><b>$ por litro</b></td>${meses.map(p => `<td class="n"><b>${tmap[p]?.ars_lt ? nf(tmap[p].ars_lt, 2) : ''}</b></td>`).join('')}</tr>
+      <tr><td>U$S por litro</td>${meses.map(p => `<td class="n">${tmap[p]?.usd_lt ? nf(tmap[p].usd_lt, 4) : ''}</td>`).join('')}</tr>
+      </tbody></table></div><p class="small muted">${ver === 'asig' ? 'Importes asignados a fábrica, en pesos de cada mes.' : 'Cada concepto dividido por los litros fabricados en el mes.'}</p></div>`
+      : '<p class="muted">No hay gastos cargados en este período. Podés cargarlos mes a mes o importarlos desde un Excel en "Carga del mes".</p>';
+    if (!usados.length) return;
+    const colores = ['#6b2fd6','#9b5de5','#f5c518','#e07a5f','#1f9d55','#3d5a80','#c44fd0','#888'];
+    new Chart($('#ch', el), { type:'bar', data:{ labels: meses.map(nm), datasets: usados.map((c, i) => ({ label: cmap[c]?.nombre, backgroundColor: colores[i % colores.length],
+      data: meses.map(p => { const v = val[c + '|' + p] || 0; if (ver === 'asig') return v; const l = tmap[p]?.litros; return l > 0 ? v / l : 0; }) })) },
+      options:{ maintainAspectRatio:false, scales:{ x:{ stacked:true }, y:{ stacked:true, ticks:{ callback: v => nf(v, ver === 'asig' ? 0 : 2) } } } } });
+  };
+  $$('#ver button', el).forEach(b => b.onclick = () => { ver = b.dataset.v; draw(); });
+  $('#d', el).onchange = e => { VISTAS._gDesde = e.target.value; GT.comparar(el); };
+  $('#h', el).onchange = e => { VISTAS._gHasta = e.target.value; GT.comparar(el); };
+  $('#xls', el).onclick = () => descargarXLSX('Gastos_directos_fabrica_' + desde + '_a_' + hasta, { 'Comparación': usados.map(c => ({ Concepto: cmap[c]?.nombre, ...Object.fromEntries(meses.map(p => [p.slice(0,7), val[c + '|' + p] || 0])) }))
+    .concat([{ Concepto: 'TOTAL ASIGNADO', ...Object.fromEntries(meses.map(p => [p.slice(0,7), tmap[p]?.asignado_ars || 0])) },
+             { Concepto: 'LITROS', ...Object.fromEntries(meses.map(p => [p.slice(0,7), tmap[p]?.litros || 0])) },
+             { Concepto: '$ POR LITRO', ...Object.fromEntries(meses.map(p => [p.slice(0,7), tmap[p]?.ars_lt || null])) }]) });
+  draw();
+};
+
+GT.egresos = async el => {
+  const d0 = new Date(); d0.setDate(1); d0.setMonth(d0.getMonth() - 11);
+  const conc = await conceptosGasto(); const cmap = Object.fromEntries(conc.map(c => [c.id, c]));
+  el.innerHTML = `<div class="bar"><label class="small">Desde</label><input type="month" id="d" value="${d0.toISOString().slice(0,7)}" style="max-width:170px"><label class="small">Hasta</label><input type="month" id="h" value="${mesActual()}" style="max-width:170px">
+    <select id="c" style="max-width:260px"><option value="">Todos los conceptos</option>${conc.map(c => `<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}</select>
+    <input class="grow" id="q" placeholder="Buscar en detalle o comprobante…"><button class="btn sec" id="xls">Excel</button><button class="btn sec" onclick="window.print()">Imprimir</button></div>
+    <div class="printhead"><b>Uxell · Gastos directos de Fábrica · listado por egreso</b></div>
+    <div class="card"><div class="tw" id="tb"></div></div>`;
+  let rows = [];
+  const load = async () => { rows = await fetchAll(() => { let q = sb.from('gastos_fabrica').select('*').gte('periodo', $('#d', el).value + '-01').lte('periodo', $('#h', el).value + '-01').order('periodo', { ascending:false }).order('id');
+    if ($('#c', el).value) q = q.eq('concepto_id', Number($('#c', el).value)); return q; }); draw(); };
+  const draw = () => {
+    const t = $('#q', el).value.trim().toUpperCase();
+    const f = rows.filter(r => !t || ((r.detalle || '') + ' ' + (r.comprobante || '') + ' ' + (cmap[r.concepto_id]?.nombre || '')).toUpperCase().includes(t));
+    const tf = f.reduce((s, r) => s + Number(r.importe_ars), 0), ta = f.reduce((s, r) => s + Number(r.importe_asignado_ars), 0);
+    $('#tb', el).innerHTML = `<table><thead><tr><th>Mes</th><th>Concepto</th><th>Detalle</th><th class="hm">Comprobante</th><th class="n">Importe total $</th><th class="n">%</th><th class="n">Asignado $</th></tr></thead><tbody>
+      ${f.map(r => `<tr><td class="nowrap">${r.periodo.slice(0,7)}</td><td><b>${esc(cmap[r.concepto_id]?.nombre)}</b></td><td>${esc(r.detalle || '')}</td><td class="hm small">${esc(r.comprobante || '')}</td>
+        <td class="n">${nf(r.importe_ars,2)}</td><td class="n">${pctTxt(r.pct_asignacion)}</td><td class="n">${nf(r.importe_asignado_ars,2)}</td></tr>`).join('') || '<tr><td colspan=7 class="muted">Sin egresos en el período</td></tr>'}
+      ${f.length ? `<tr><td colspan=4><b>TOTAL (${f.length} egresos)</b></td><td class="n"><b>${nf(tf,2)}</b></td><td></td><td class="n"><b>${nf(ta,2)}</b></td></tr>` : ''}</tbody></table>`;
+    $('#xls', el).onclick = () => descargarXLSX('Gastos_directos_fabrica_egresos', { Egresos: f.map(r => ({ Mes: r.periodo.slice(0,7), Concepto: cmap[r.concepto_id]?.nombre, Detalle: r.detalle, Comprobante: r.comprobante, 'Importe total $': Number(r.importe_ars), '% fábrica': Number(r.pct_asignacion) * 100, 'Asignado $': Number(r.importe_asignado_ars) })) });
+  };
+  $('#d', el).onchange = load; $('#h', el).onchange = load; $('#c', el).onchange = load; $('#q', el).oninput = draw;
+  await load();
 };
 
 // =====================================================================
@@ -1171,7 +1365,7 @@ INF.costos = async el => {
     <label class="small nowrap"><input type="checkbox" id="pesos" style="width:auto"> Mostrar en pesos</label>
     <button class="btn sec" id="xls">Excel</button><button class="btn sec" onclick="window.print()">Imprimir</button></div>
     <div class="printhead"><b>Uxell · Lista de costos</b> — ${fd(hoy())} · Dólar ${nf(S.dolar,2)}</div>
-    <p class="small muted">Costo de la <b>última partida</b> de cada producto, por litro real producido. ① granel · ② con envase · ③ con gastos del mes (horas hombre + luz + materiales; aparece cuando el mes tiene gastos cargados).</p>
+    <p class="small muted">Costo de la <b>última partida</b> de cada producto, por litro real producido. ① granel · ② con envase · ③ con Gastos directos de Fábrica del mes repartidos por litro (aparece cuando el mes tiene gastos cargados).</p>
     <div class="card"><div class="tw" id="tb"></div></div>`;
   const draw = () => {
     const q = $('#q', el).value.trim().toUpperCase(), t = $('#t', el).value, p = $('#pesos', el).checked;
@@ -1324,7 +1518,7 @@ async function excelProduccionMes(mes){
   // ---- Resumen
   const R = [[`ÜXELL — PARTIDAS FABRICADAS ${nombreMes}`], [`Generado el ${fd(hoy())} · costos en U$S y en pesos al dólar de cada partida`], [],
     ['Nº partida','Fecha','Lote','Código','Producto','Tipo','Cant. teórica','Litros producidos','Rendimiento %','Insumos U$S','Merma U$S','Energía + accesorios U$S','Envases U$S','Costo total U$S',
-     '① Granel U$S/lt','② Con envase U$S/lt','③ Con gastos del mes U$S/lt','Dólar','① Granel $/lt','② Con envase $/lt','Estado','Observaciones']];
+     '① Granel U$S/lt','② Con envase U$S/lt','③ Con gastos directos de fábrica U$S/lt','Dólar','① Granel $/lt','② Con envase $/lt','Estado','Observaciones']];
   const tot = { teor:0, lt:0, ins:0, merma:0, extra:0, env:0 };
   parts.forEach(p => {
     const extra = Number(p.energia_usd||0) + Number(p.accesorios_usd||0);
@@ -1373,11 +1567,22 @@ async function excelProduccionMes(mes){
       ['RESULTADO', '', '', 'U$S / LT', '$ / LT'],
       ['', '① Costo granel', '', r(p.costo_granel_lt_usd), p.cotizacion ? r(p.costo_granel_lt_usd * p.cotizacion, 2) : null],
       ['', '② Costo con envase', '', r(p.costo_envasado_lt_usd), p.cotizacion && p.costo_envasado_lt_usd ? r(p.costo_envasado_lt_usd * p.cotizacion, 2) : null],
-      ['', '③ Con gastos del mes', '', r(p.costo_total_lt_usd), p.cotizacion && p.costo_total_lt_usd ? r(p.costo_total_lt_usd * p.cotizacion, 2) : null]);
+      ['', '③ Con gastos directos de fábrica', '', r(p.costo_total_lt_usd), p.cotizacion && p.costo_total_lt_usd ? r(p.costo_total_lt_usd * p.cotizacion, 2) : null]);
     if (p.horas_hombre) A.push(['', `Horas hombre: ${p.horas_hombre}`]);
     if (p.nota) A.push([], ['NOTA', p.nota]);
     hoja(A, [11,38,10,13,13,10,12,13,13], String(p.nro));
   });
+
+  // ---- Gastos directos de fábrica del mes
+  const [gf, cg, gt] = await Promise.all([sb.from('gastos_fabrica').select('*').eq('periodo', mes + '-01').order('id'), conceptosGasto(), sb.from('v_gastos_fabrica_mes').select('*').eq('periodo', mes + '-01').maybeSingle()]);
+  const GF = chk(gf), cm = Object.fromEntries(cg.map(c => [c.id, c.nombre]));
+  if (GF.length) {
+    const Gs = [[`ÜXELL — GASTOS DIRECTOS DE FÁBRICA ${nombreMes}`], [], ['Concepto','Detalle','Comprobante','Importe total $','% fábrica','Asignado $']];
+    GF.forEach(g => Gs.push([cm[g.concepto_id], g.detalle || '', g.comprobante || '', r(g.importe_ars,2), r(g.pct_asignacion*100,2), r(g.importe_asignado_ars,2)]));
+    const T = gt.data;
+    if (T) Gs.push([], ['TOTAL ASIGNADO', '', '', r(T.total_ars,2), '', r(T.asignado_ars,2)], ['Litros fabricados', '', '', '', '', r(T.litros,0)], ['$ por litro', '', '', '', '', r(T.ars_lt,2)], ['U$S por litro', '', '', '', '', r(T.usd_lt,4)]);
+    hoja(Gs, [30,34,16,16,10,16], 'Gastos de Fábrica');
+  }
 
   // ---- Detalle plano (para filtrar)
   const D = [['Nº partida','Fecha','Producto','Código insumo','Insumo','Unidad','Cant. receta','Cant. real','U$S/unid','Subtotal U$S']];
@@ -1429,7 +1634,7 @@ VISTAS.config = async app => {
   const ci = $('#ciFile', app); if (ci) ci.onchange = () => guard(() => cargaInicial(ci.files[0], $('#ciOut', app)));
   if (isAdmin()) {
     const us = chk(await sb.from('perfiles').select('*').order('creado_en'));
-    const P = [['es_admin','Admin (todo)'],['p_compras','Compras'],['p_precios','Precios'],['p_recetas','Recetas'],['p_produccion','Producción'],['p_gastos','Gastos mes'],['activo','Activo']];
+    const P = [['es_admin','Admin (todo)'],['p_compras','Compras'],['p_precios','Precios'],['p_recetas','Recetas'],['p_produccion','Producción'],['p_gastos','Gastos fábrica'],['activo','Activo']];
     $('#us', app).innerHTML = `<table><thead><tr><th>Usuario</th>${P.map(p => `<th>${p[1]}</th>`).join('')}</tr></thead><tbody>${us.map(u => `<tr><td><input value="${esc(u.nombre||'')}" data-n="${u.id}" style="min-width:120px"><div class="small muted">${esc(u.email)}</div></td>${P.map(p => `<td><input type="checkbox" style="width:auto" data-u="${u.id}" data-k="${p[0]}" ${u[p[0]]?'checked':''} ${u.id===S.user.id && (p[0]==='es_admin'||p[0]==='activo') ? 'disabled':''}></td>`).join('')}</tr>`).join('')}</tbody></table>
       <p class="small muted">Sugerido: Verónica → Compras + Precios · Romina → Precios + Recetas + Producción · Ingeniero → Recetas + Producción · Diego, Franco y Agustín → Admin.</p>`;
     $$('[data-u]', app).forEach(c => c.onchange = () => guard(async () => { chk(await sb.from('perfiles').update({ [c.dataset.k]: c.checked }).eq('id', c.dataset.u)); toast('Permiso actualizado'); }));
@@ -1576,7 +1781,7 @@ async function listarCopias(el){
 
 async function respaldo(){
   toast('Preparando respaldo…');
-  const tablas = ['items','proveedores','cotizaciones','compras','valuaciones','recetas','receta_lineas','partidas','partida_insumos','partida_envases','movimientos_stock','gastos_mes','precios_venta'];
+  const tablas = ['mp_base','items','proveedores','cotizaciones','compras','valuaciones','recetas','receta_lineas','partidas','partida_insumos','partida_envases','movimientos_stock','gastos_mes','conceptos_gasto','gastos_fabrica','precios_venta'];
   const hojas = {};
   for (const t of tablas) hojas[t] = await fetchAll(() => sb.from(t).select('*'));
   descargarXLSX('Respaldo_Uxell_Costos_' + hoy(), hojas);
