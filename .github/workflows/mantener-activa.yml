@@ -1,9 +1,11 @@
 name: Mantener activa la base de datos
 on:
   schedule:
-    - cron: "23 11 * * *"   # 8:23 de Argentina
-    - cron: "53 23 * * *"   # 20:53 de Argentina
+    - cron: "23 11 * * *"   # todos los días 8:23 de Argentina
+    - cron: "53 23 * * *"   # todos los días 20:53 de Argentina
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   ping:
     runs-on: ubuntu-latest
@@ -13,3 +15,17 @@ jobs:
           curl -fsS -X POST "https://rgvahqfdybonjwroqwsp.supabase.co/rest/v1/rpc/latido" \
             -H "apikey: sb_publishable_JgkZSgclP3J2m1Twoaf-oQ_FBGtJvo7" \
             -H "Content-Type: application/json" -d '{}' -w "\nHTTP %{http_code}\n"
+      # GitHub apaga las tareas programadas de un repositorio sin cambios en 60 días.
+      # Los lunes a la mañana se anota la fecha en un archivo para que el repositorio siga "activo".
+      - name: Mantener activo el repositorio (lunes)
+        if: github.event.schedule == '23 11 * * *'
+        run: |
+          if [ "$(date -u +%u)" = "1" ]; then
+            git clone --depth 1 "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" repo
+            cd repo
+            date -u +"%Y-%m-%d %H:%M UTC" > .github/ultimo-latido.txt
+            git config user.name "uxell-bot"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .github/ultimo-latido.txt
+            git commit -m "Latido semanal [skip ci]" && git push
+          fi
