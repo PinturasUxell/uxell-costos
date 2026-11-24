@@ -113,8 +113,9 @@ tr.click:hover td{background:#faf8fe}
 #printHead{display:none}
 @media print{
   #printHead{display:block;margin-bottom:10px}
-  #printHead .ph-band{display:flex;align-items:center;gap:16px;background:#000 !important;color:#fff;padding:10px 14px;border-radius:8px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  #printHead img{height:48px}
+  .grad{display:none!important}
+  #printHead .ph-band{display:flex;align-items:center;gap:18px;background:#fff;color:#000;padding:10px 14px;border:1.5px solid #333;border-radius:8px}
+  #printHead img{height:56px}
   #printHead .ph-t{font-size:16px;font-weight:700}
   #printHead .ph-s{font-size:11px;opacity:.85}
   #printHead .ph-f{margin-top:6px;font-size:11px;border:1px solid #ccc;border-radius:6px;padding:6px 8px}
@@ -331,7 +332,7 @@ const fdi = v => v ? (v.length === 7 ? nomMesLargo(v + '-01') : fd(v)) : '';
 function filtrosLista(){ try { return (PRINT.filtros() || []).filter(f => f && f[1] != null && f[1] !== ''); } catch (e) { return []; } }
 function imprimir(){
   const f = filtrosLista();
-  $('#printHead').innerHTML = `<div class="ph-band"><img src="logo.png" alt="Üxell"><div><div class="ph-t">${esc(PRINT.titulo)}</div>
+  $('#printHead').innerHTML = `<div class="ph-band"><img src="logo-claro.png" alt="Üxell"><div><div class="ph-t">${esc(PRINT.titulo)}</div>
     <div class="ph-s">Emitido el ${fd(hoy())} ${new Date().toLocaleTimeString('es-AR', { hour:'2-digit', minute:'2-digit' })} · ${esc(S.perfil?.nombre || '')} · Dólar BNA ${S.dolar ? nf(S.dolar,2) : '—'}</div></div></div>
     ${f.length ? `<div class="ph-f"><b>Filtros:</b> ${f.map(([k, v]) => `${esc(k)}: <b>${esc(v)}</b>`).join(' · ')}</div>` : ''}`;
   setTimeout(() => window.print(), 50);
@@ -1085,8 +1086,8 @@ function imprimirPartida(P, prod, lineas, envases, c){
   const w = window.open('', '_blank');
   if (!w) { toast('El navegador bloqueó la ventana de impresión', true); return; }
   w.document.write(`<html><head><title>Partida ${P.nro}</title><style>body{font:12px Arial;margin:20px}table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #ccc;padding:4px;text-align:left}.n{text-align:right}h1{font-size:18px}</style></head><body>
-    <div style="background:#000;padding:10px 14px;border-radius:8px;display:flex;align-items:center;gap:14px;-webkit-print-color-adjust:exact;print-color-adjust:exact">
-      <img src="${new URL('logo.png', location.href)}" style="height:48px"><div style="color:#fff"><b style="font-size:16px">Registro de Producción · Partida ${P.nro}</b><br><span style="font-size:11px">Emitido el ${fd(hoy())}</span></div></div>
+    <div style="background:#fff;border:1.5px solid #333;padding:10px 14px;border-radius:8px;display:flex;align-items:center;gap:16px">
+      <img src="${new URL('logo-claro.png', location.href)}" style="height:56px"><div style="color:#000"><b style="font-size:16px">Registro de Producción · Partida ${P.nro}</b><br><span style="font-size:11px">Emitido el ${fd(hoy())}</span></div></div>
     <h1>${esc(prod.codigo)} · ${esc(prod.nombre)}</h1>
     <p>Fecha ${fd(P.fecha)} · Lote ${esc(P.lote||'')} · Teórica ${nf(P.cant_teorica,0)} · Real ${nf(P.litros_producidos,0)} · Dólar ${nf(P.cotizacion,2)}</p>
     <table><tr><th>Código</th><th>Insumo</th><th class="n">Receta</th><th class="n">Real</th><th class="n">U$S/u</th><th class="n">Subtotal</th></tr>
