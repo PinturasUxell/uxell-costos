@@ -1741,8 +1741,8 @@ async function importarPartidasXLSX(file, out){
   const resumen = {};
   const rs = wb.SheetNames.find(n => /^resumen/i.test(n.trim()));
   if (rs) XLSX.utils.sheet_to_json(wb.Sheets[rs], { header:1, raw:true }).slice(1).forEach(r => { if (r[0] != null) resumen[String(r[0]).trim()] = r; });
-  const existentes = new Set((await fetchAll(() => sb.from('partidas').select('nro'))).map(p => p.nro));
-  const log = []; let n = 0, salt = 0;
+  const existentes = new Map((await fetchAll(() => sb.from('partidas').select('id,nro,origen'))).map(p => [p.nro, p]));
+  const log = []; let n = 0, salt = 0, reemp = 0;
   for (const s of wb.SheetNames) {
     if (/^resumen/i.test(s.trim())) continue;
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[s], { header:1, raw:true, defval:null }).slice(0, 80);
@@ -1755,7 +1755,9 @@ async function importarPartidasXLSX(file, out){
     const h2 = rows[1] || [], h5 = rows[4] || [];
     const nro = num(s.trim()) ? Number(s.trim()) : num(h2[0]);
     if (!nro) { log.push(`Hoja ${s}: sin número`); continue; }
-    if (existentes.has(nro)) { salt++; continue; }
+    const ex = existentes.get(nro);
+    if (ex && ex.origen !== 'historica') { salt++; continue; }
+    if (ex) { chk(await sb.from('partidas').delete().eq('id', ex.id)); reemp++; }  // la histórica (solo resumen) se reemplaza por el detalle completo
     const res = resumen[String(nro)];
     const okF = x => x && x >= '2020-01-01' && x <= hoy();
     const fecha = [D(h2[6]), res && D(res[1]), res && D(res[5])].find(okF);
@@ -1789,8 +1791,9 @@ async function importarPartidasXLSX(file, out){
     chk(await sb.rpc('finalizar_importada', { p_id: p.id }));
     n++; out.innerHTML = `<p class="muted">Importando… ${n} partidas</p>`;
   }
+  let rel = 0; try { rel = chk(await sb.rpc('generar_relevamiento')); } catch (e) { log.push('No se pudo generar el relevamiento de precios: ' + e.message); }
   await recargarVal();
-  out.innerHTML = `<div class="alert info">Listo: ${n} partidas importadas${salt ? `, ${salt} ya existían` : ''}.</div>${log.length ? `<details><summary>Avisos (${log.length})</summary><ul class="small">${log.map(l => `<li>${esc(l)}</li>`).join('')}</ul></details>` : ''}`;
+  out.innerHTML = `<div class="alert info">Listo: ${n} partidas importadas con su detalle${reemp ? ` (${reemp} reemplazaron a partidas que solo tenían el resumen)` : ''}${salt ? `, ${salt} ya estaban completas y no se tocaron` : ''}. ${rel ? `Se agregaron ${rel} precios al relevamiento mensual.` : ''}</div>${log.length ? `<details><summary>Avisos (${log.length})</summary><ul class="small">${log.map(l => `<li>${esc(l)}</li>`).join('')}</ul></details>` : ''}`;
 }
 
 
