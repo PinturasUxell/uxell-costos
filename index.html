@@ -426,11 +426,11 @@ VISTAS.compras = async app => {
     const t = $('#q', app).value.trim().toUpperCase();
     const pmap = Object.fromEntries(S.prov.map(p => [p.id, p.nombre]));
     if (t) rows = rows.filter(r => { const i = S.itemById[r.item_id] || {}; return (i.codigo + ' ' + i.nombre + ' ' + (pmap[r.proveedor_id]||'') + ' ' + (r.oc||'') + ' ' + (r.factura_nro||'')).toUpperCase().includes(t); });
-    $('#tabla', app).innerHTML = rows.length ? `<table><thead><tr><th>Fecha</th><th>Insumo</th><th class="hm">Proveedor</th><th class="n">Cantidad</th><th class="n hm">Precio</th><th class="n">U$S/unid</th><th>Entrega</th><th>Pago</th></tr></thead><tbody>${
+    $('#tabla', app).innerHTML = rows.length ? `<table><thead><tr><th>Fecha</th><th>Insumo</th><th class="hm">Proveedor</th><th class="n">Cantidad</th><th class="n hm">Precio</th><th class="n hm">Costo unit. U$S</th><th class="n">Costo unit. total U$S <span class="small" style="font-weight:400">(c/gastos)</span></th><th>Entrega</th><th>Pago</th></tr></thead><tbody>${
       rows.map(r => { const i = S.itemById[r.item_id] || {};
         return `<tr class="click" data-id="${r.id}"><td class="nowrap">${fd(r.fecha)}</td><td><b>${esc(i.codigo)}</b> ${esc(i.nombre)}${r.lote_proveedor ? ` <span class="small muted">· lote ${esc(r.lote_proveedor)}</span>` : ''}</td><td class="hm">${esc(pmap[r.proveedor_id]||'—')}</td>
         <td class="n">${nf(r.cantidad,1)} ${esc(i.unidad||'')}</td><td class="n hm">${r.moneda==='ARS'?'$':'U$S'} ${nf(r.precio_unit,2)}</td>
-        <td class="n">${nf(r.costo_con_gastos_usd ?? r.precio_unit_usd,3)}</td>
+        <td class="n hm">${nf(r.precio_unit_usd,3)}</td><td class="n">${r.costo_con_gastos_usd != null ? nf(r.costo_con_gastos_usd,3) : '<span class="muted small">sin entrega</span>'}</td>
         <td>${r.fecha_entrega ? `<span class="badge b-ok">${fd(r.fecha_entrega)}</span>` : (r.origen==='importacion' ? '<span class="badge b-gray">planilla</span>' : '<span class="badge b-warn">pendiente</span>')}</td>
         <td>${r.fecha_pago ? `<span class="badge b-ok">${fd(r.fecha_pago)}</span>` : (r.origen==='importacion' ? '' : '<span class="badge b-warn">pendiente</span>')}</td></tr>`; }).join('')
     }</tbody></table>` : '<p class="muted">No hay compras para mostrar.</p>';
@@ -654,8 +654,8 @@ async function fichaBase(baseId){
     <h3>Evolución del precio (todos los proveedores)</h3>
     <div class="chartbox" style="height:200px"><canvas id="ch"></canvas></div>
     <h3>Compras</h3>
-    <div class="tw" style="max-height:260px"><table><thead><tr><th>Fecha</th><th>Código</th><th>Proveedor</th><th>Lote</th><th class="n">Cant.</th><th class="n">U$S/u</th></tr></thead><tbody>
-    ${comps.map(c => `<tr><td>${fd(c.fecha)}</td><td>${esc(S.itemById[c.item_id]?.codigo)}</td><td>${esc(pmap[c.proveedor_id] || '')}</td><td>${esc(c.lote_proveedor || '')}</td><td class="n">${nf(c.cantidad,0)}</td><td class="n">${nf(c.costo_con_gastos_usd ?? c.precio_unit_usd,3)}</td></tr>`).join('') || '<tr><td colspan=6 class="muted">Sin compras registradas</td></tr>'}</tbody></table></div>
+    <div class="tw" style="max-height:260px"><table><thead><tr><th>Fecha</th><th>Código</th><th>Proveedor</th><th>Lote</th><th class="n">Cant.</th><th class="n">Costo unitario U$S</th><th class="n">Costo unitario total U$S<br><span class="small" style="font-weight:400">(incluye gastos)</span></th></tr></thead><tbody>
+    ${comps.map(c => `<tr><td>${fd(c.fecha)}</td><td>${esc(S.itemById[c.item_id]?.codigo)}</td><td>${esc(pmap[c.proveedor_id] || '')}</td><td>${esc(c.lote_proveedor || '')}</td><td class="n">${nf(c.cantidad,0)}</td><td class="n">${nf(c.precio_unit_usd,3)}</td><td class="n">${c.costo_con_gastos_usd != null ? nf(c.costo_con_gastos_usd,3) : '<span class="muted small">sin entrega</span>'}</td></tr>`).join('') || '<tr><td colspan=7 class="muted">Sin compras registradas</td></tr>'}</tbody></table></div>
     <h3>Valuaciones</h3>
     <div class="tw" style="max-height:220px"><table><thead><tr><th>Fecha</th><th>Código</th><th class="n">U$S</th><th>Origen</th></tr></thead><tbody>
     ${vals.map(v => `<tr><td>${fd(v.fecha)}</td><td>${esc(S.itemById[v.item_id]?.codigo)}</td><td class="n">${nf(v.costo_usd,4)}</td><td>${origenBadge(v.origen)}</td></tr>`).join('') || '<tr><td colspan=4 class="muted">Sin valuaciones</td></tr>'}</tbody></table></div>
@@ -1529,8 +1529,8 @@ INF.precio = async el => {
     const porFecha = {}; h.filter(x => x.origen === 'partida').forEach(x => porFecha[x.fecha] = Number(x.costo_usd));
     const ser = Object.entries(porFecha).sort();
     $('#out', el).innerHTML = `<div class="card"><div class="chartbox"><canvas id="ch"></canvas></div></div>
-      <div class="card"><h3 style="margin-top:0">Compras</h3><div class="tw"><table><thead><tr><th>Fecha</th><th>Código</th><th>Proveedor</th><th class="n">Cantidad</th><th class="n">Precio</th><th class="n">U$S/u</th></tr></thead><tbody>
-      ${c.slice().reverse().map(x => `<tr><td>${fd(x.fecha)}</td><td>${esc(S.itemById[x.item_id]?.codigo)}${x.lote_proveedor ? ' · lote ' + esc(x.lote_proveedor) : ''}</td><td>${esc(pmap[x.proveedor_id]||'')}</td><td class="n">${nf(x.cantidad,0)}</td><td class="n">${x.moneda==='ARS'?'$':'U$S'} ${nf(x.precio_unit,2)}</td><td class="n">${nf(x.costo_con_gastos_usd ?? x.precio_unit_usd,4)}</td></tr>`).join('') || '<tr><td colspan=6 class="muted">Sin compras en el período</td></tr>'}</tbody></table></div></div>`;
+      <div class="card"><h3 style="margin-top:0">Compras</h3><div class="tw"><table><thead><tr><th>Fecha</th><th>Código</th><th>Proveedor</th><th class="n">Cantidad</th><th class="n">Precio</th><th class="n">Costo unitario U$S</th><th class="n">Costo unitario total U$S<br><span class="small" style="font-weight:400">(incluye gastos)</span></th></tr></thead><tbody>
+      ${c.slice().reverse().map(x => `<tr><td>${fd(x.fecha)}</td><td>${esc(S.itemById[x.item_id]?.codigo)}${x.lote_proveedor ? ' · lote ' + esc(x.lote_proveedor) : ''}</td><td>${esc(pmap[x.proveedor_id]||'')}</td><td class="n">${nf(x.cantidad,0)}</td><td class="n">${x.moneda==='ARS'?'$':'U$S'} ${nf(x.precio_unit,2)}</td><td class="n">${nf(x.precio_unit_usd,4)}</td><td class="n">${x.costo_con_gastos_usd != null ? nf(x.costo_con_gastos_usd,4) : '<span class="muted small" title="Se calcula al registrar la entrega">sin entrega</span>'}</td></tr>`).join('') || '<tr><td colspan=7 class="muted">Sin compras en el período</td></tr>'}</tbody></table></div></div>`;
     new Chart($('#ch', el), { type:'line', data:{ datasets:[
       { label:'Costo usado en partidas', data: ser.map(([f,v]) => ({x:f, y:v})), borderColor:'#6b2fd6', stepped:true, pointRadius:1 },
       { label:'Compras (U$S/u)', data: c.map(x => ({x:x.fecha, y: Number(x.costo_con_gastos_usd ?? x.precio_unit_usd)})), borderColor:'#e0a800', backgroundColor:'#e0a800', showLine:false, pointRadius:4 },
