@@ -110,6 +110,17 @@ tr.click:hover td{background:#faf8fe}
   .printhead{display:block!important}
 }
 .printhead{display:none;margin-bottom:8px}
+#printHead{display:none}
+@media print{
+  #printHead{display:block;margin-bottom:10px}
+  #printHead .ph-band{display:flex;align-items:center;gap:16px;background:#000 !important;color:#fff;padding:10px 14px;border-radius:8px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  #printHead img{height:48px}
+  #printHead .ph-t{font-size:16px;font-weight:700}
+  #printHead .ph-s{font-size:11px;opacity:.85}
+  #printHead .ph-f{margin-top:6px;font-size:11px;border:1px solid #ccc;border-radius:6px;padding:6px 8px}
+  .bar,.noprint,.seg{display:none!important}
+  canvas{max-width:100%!important}
+}
 .dash{display:grid;gap:12px;grid-template-columns:1fr}
 @media(min-width:900px){.dash{grid-template-columns:1fr 1fr}.dash .full{grid-column:1/-1}}
 .dash .card{margin:0}
@@ -135,6 +146,7 @@ tr.click:hover td{background:#faf8fe}
 </header>
 <div class="grad"></div>
 <nav class="tabs hidden" id="nav"></nav>
+<div id="printHead"></div>
 <main id="app"></main>
 <div id="modalRoot"></div>
 
@@ -301,12 +313,29 @@ async function router(){
   if (!S.user) return;
   const id = (location.hash || '#inicio').slice(1);
   pintarNav();
+  setPrint('Uxell Costos · ' + ((RUTAS.find(r => r.id === id) || {}).t || ''));
   const app = $('#app'); app.innerHTML = '<p class="muted">Cargando…</p>';
   const fn = VISTAS[id] || VISTAS.inicio;
   await guard(() => fn(app));
   window.scrollTo(0,0);
 }
 const VISTAS = {};
+// Encabezado de impresión y de Excel: logo, título y filtros elegidos
+let PRINT = { titulo: 'Uxell Costos', filtros: () => [] };
+function setPrint(titulo, filtros){ PRINT = { titulo, filtros: filtros || (() => []) }; }
+const V = sel => { const e = $(sel); return e ? (e.value || '').trim() : ''; };
+const segTxt = sel => { const b = $(sel + ' button.on'); return b ? b.textContent.trim() : ''; };
+const selTxt = sel => { const e = $(sel); return e && e.selectedIndex >= 0 ? e.options[e.selectedIndex].text : ''; };
+const chkd = sel => { const e = $(sel); return !!(e && e.checked); };
+const fdi = v => v ? (v.length === 7 ? nomMesLargo(v + '-01') : fd(v)) : '';
+function filtrosLista(){ try { return (PRINT.filtros() || []).filter(f => f && f[1] != null && f[1] !== ''); } catch (e) { return []; } }
+function imprimir(){
+  const f = filtrosLista();
+  $('#printHead').innerHTML = `<div class="ph-band"><img src="logo.png" alt="Üxell"><div><div class="ph-t">${esc(PRINT.titulo)}</div>
+    <div class="ph-s">Emitido el ${fd(hoy())} ${new Date().toLocaleTimeString('es-AR', { hour:'2-digit', minute:'2-digit' })} · ${esc(S.perfil?.nombre || '')} · Dólar BNA ${S.dolar ? nf(S.dolar,2) : '—'}</div></div></div>
+    ${f.length ? `<div class="ph-f"><b>Filtros:</b> ${f.map(([k, v]) => `${esc(k)}: <b>${esc(v)}</b>`).join(' · ')}</div>` : ''}`;
+  setTimeout(() => window.print(), 50);
+}
 
 VISTAS.mas = async app => {
   app.innerHTML = `<h1>Más</h1><div class="grid">${RUTAS.filter(r => !MOVIL.includes(r.id)).map(r =>
@@ -550,6 +579,8 @@ async function nuevaCompra(id){
 // =====================================================================
 let filtroPrecio = { tipo:'base', viejos:false, sinCtrl:false, q:'' };
 VISTAS.precios = async app => {
+  setPrint('Revisión de precios de materias primas y envases', () => [['Vista', segTxt('#seg')], ['Búsqueda', V('#q')],
+    ['Antigüedad', chkd('#viejos') ? 'solo precios con más de 30 días' : ''], ['Control de valor', chkd('#sinCtrl') ? 'incluye los que no tienen control' : 'solo con control de valor']]);
   app.innerHTML = `<h1>Revisión de precios</h1>
     <p class="muted small" style="margin-top:-6px">Última valuación de cada insumo y de dónde salió. Verde ≤ 30 días · amarillo ≤ 90 · rojo más viejo.</p>
     <div class="bar">
@@ -558,9 +589,8 @@ VISTAS.precios = async app => {
       <label class="small nowrap"><input type="checkbox" id="viejos" style="width:auto" ${filtroPrecio.viejos?'checked':''}> Solo más de 30 días</label>
       <label class="small nowrap"><input type="checkbox" id="sinCtrl" style="width:auto" ${filtroPrecio.sinCtrl?'checked':''}> Ver también sin control de valor</label>
       ${can('precios') || can('compras') ? '<button class="btn sec" id="nuevo">+ Nuevo item</button>' : ''}
-      <button class="btn sec" onclick="window.print()">Imprimir</button>
+      <button class="btn sec" onclick="imprimir()">Imprimir</button>
     </div>
-    <div class="printhead"><b>Uxell · Revisión de precios</b> — ${fd(hoy())}</div>
     <div class="card"><div class="tw" id="tabla"></div></div>`;
   const [rows, pbase] = await Promise.all([fetchAll(() => sb.from('v_revision_precios').select('*').order('codigo')), fetchAll(() => sb.from('v_precio_base').select('*'))]);
   const draw = () => {
@@ -820,13 +850,13 @@ async function editorReceta(prodId, onDone){
 let mesProd = mesActual(), modoProd = 'mes';
 let perProd = (() => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 2); return { d: d.toISOString().slice(0,10), h: hoy() }; })();
 VISTAS.produccion = async app => {
+  setPrint('Registro de Producción · Partidas fabricadas', () => [['Período', modoProd === 'mes' ? nomMesLargo(mesProd + '-01') : fd(perProd.d) + ' al ' + fd(perProd.h)], ['Búsqueda', V('#q')]]);
   app.innerHTML = `<h1>Registro de Producción</h1>
     <div class="bar"><div class="seg" id="modo"><button data-m="mes">Mes</button><button data-m="per">Período</button></div>
     <span id="selMes"><input type="month" id="mes" value="${mesProd}" style="max-width:180px"></span>
     <span id="selPer" class="row" style="gap:6px;flex:0 1 auto"><input type="date" id="pd" value="${perProd.d}" style="max-width:160px"><input type="date" id="ph" value="${perProd.h}" style="max-width:160px"></span>
     <input class="grow" id="q" placeholder="Buscar producto, nº, lote…">
-    ${can('produccion') ? '<button class="btn" id="nueva">+ Registro de Producción</button>' : ''}<button class="btn sec" id="xlsMes">⬇ Excel</button><button class="btn sec" onclick="window.print()">Imprimir</button></div>
-    <div class="printhead"><b>Uxell · Partidas fabricadas <span id="phTxt"></span></b></div>
+    ${can('produccion') ? '<button class="btn" id="nueva">+ Registro de Producción</button>' : ''}<button class="btn sec" id="xlsMes">⬇ Excel</button><button class="btn sec" onclick="imprimir()">Imprimir</button></div>
     <div id="kp" class="grid" style="margin-bottom:10px"></div>
     <div class="card"><div class="tw" id="tabla"></div></div>`;
   const rango = () => { if (modoProd === 'mes') { mesProd = $('#mes', app).value || mesActual(); const [y, m] = mesProd.split('-').map(Number);
@@ -1055,7 +1085,9 @@ function imprimirPartida(P, prod, lineas, envases, c){
   const w = window.open('', '_blank');
   if (!w) { toast('El navegador bloqueó la ventana de impresión', true); return; }
   w.document.write(`<html><head><title>Partida ${P.nro}</title><style>body{font:12px Arial;margin:20px}table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #ccc;padding:4px;text-align:left}.n{text-align:right}h1{font-size:18px}</style></head><body>
-    <h1>Üxell · Partida ${P.nro} — ${esc(prod.codigo)} ${esc(prod.nombre)}</h1>
+    <div style="background:#000;padding:10px 14px;border-radius:8px;display:flex;align-items:center;gap:14px;-webkit-print-color-adjust:exact;print-color-adjust:exact">
+      <img src="${new URL('logo.png', location.href)}" style="height:48px"><div style="color:#fff"><b style="font-size:16px">Registro de Producción · Partida ${P.nro}</b><br><span style="font-size:11px">Emitido el ${fd(hoy())}</span></div></div>
+    <h1>${esc(prod.codigo)} · ${esc(prod.nombre)}</h1>
     <p>Fecha ${fd(P.fecha)} · Lote ${esc(P.lote||'')} · Teórica ${nf(P.cant_teorica,0)} · Real ${nf(P.litros_producidos,0)} · Dólar ${nf(P.cotizacion,2)}</p>
     <table><tr><th>Código</th><th>Insumo</th><th class="n">Receta</th><th class="n">Real</th><th class="n">U$S/u</th><th class="n">Subtotal</th></tr>
     ${lineas.map(l => { const it = S.itemById[l.insumo_id]||{}; return `<tr><td>${esc(it.codigo)}</td><td>${esc(it.nombre)}</td><td class="n">${nf(l.cantidad_receta,2)}</td><td class="n">${nf(l.cantidad,2)}</td><td class="n">${nf(l.costo_unit_usd,4)}</td><td class="n">${nf(l.cantidad*l.costo_unit_usd,2)}</td></tr>`; }).join('')}</table>
@@ -1069,12 +1101,12 @@ function imprimirPartida(P, prod, lineas, envases, c){
 //  STOCK
 // =====================================================================
 VISTAS.stock = async app => {
+  setPrint('Stock', () => [['Vista', segTxt('#seg')], ['Búsqueda', V('#q')], ['Filtro', chkd('#neg') ? 'solo negativos' : ''], ['Saldo al', fd(hoy())]]);
   app.innerHTML = `<h1>Stock</h1>
     <div class="alert info small">El stock se calcula así: <b>stock inicial + compras recibidas − lo usado en cada partida ± ajustes manuales</b>. Mientras no se cargue el stock inicial de un insumo, su saldo no es confiable.</div>
     <div class="bar"><div class="seg" id="seg"><button data-t="base">Por materia prima base</button><button data-t="mp">Por código</button><button data-t="envase">Envases</button><button data-t="interno">Fabricación interna</button></div>
     <input class="grow" id="q" placeholder="Buscar…"><label class="small nowrap"><input type="checkbox" id="neg" style="width:auto"> Solo negativos</label>
-    ${can('produccion') || can('compras') ? '<button class="btn sec" id="inv">Cargar inventario inicial</button>' : ''}<button class="btn sec" onclick="window.print()">Imprimir</button></div>
-    <div class="printhead"><b>Uxell · Stock al ${fd(hoy())}</b></div>
+    ${can('produccion') || can('compras') ? '<button class="btn sec" id="inv">Cargar inventario inicial</button>' : ''}<button class="btn sec" onclick="imprimir()">Imprimir</button></div>
     <div class="card"><div class="tw" id="tabla"></div></div>`;
   const [rows, sbase] = await Promise.all([fetchAll(() => sb.from('v_stock').select('*').order('codigo')), fetchAll(() => sb.from('v_stock_base').select('*').order('nombre'))]);
   let tipo = 'base';
@@ -1175,6 +1207,7 @@ async function conceptosGasto(){ return chk(await sb.from('conceptos_gasto').sel
 
 GT.mes = async el => {
   const per = VISTAS._mesG || mesActual(), p1 = per + '-01';
+  setPrint('Gastos directos de Fábrica · ' + nomMesLargo(p1), () => [['Mes', nomMesLargo(p1)]]);
   const ro = !can('gastos');
   const [conc, filas, tot, mp, gm] = await Promise.all([
     conceptosGasto(),
@@ -1196,7 +1229,7 @@ GT.mes = async el => {
       </div>
     </div>
     <div class="card">
-      <div class="bar"><h2 style="margin:0;flex:1">Egresos de ${nomMesLargo(p1)}</h2>
+      <div class="bar"><h2 style="margin:0;flex:1">Egresos de ${nomMesLargo(p1)}</h2><button class="btn sec sm" onclick="imprimir()">Imprimir</button>
         ${ro ? '' : `<button class="btn sm" id="add">+ Agregar gasto</button><button class="btn sec sm" id="copiar">Traer los del mes anterior</button><button class="btn sec sm" id="conc">Conceptos</button><button class="btn sec sm" id="imp">Importar Excel</button>`}</div>
       <div class="tw"><table><thead><tr><th>Concepto</th><th>Detalle</th><th class="hm">Comprobante</th><th class="n">Importe total $</th><th class="n">% fábrica</th><th class="n">Asignado $</th><th></th></tr></thead><tbody>
       ${orden.map(g => `<tr ${ro ? '' : `class="click" data-g="${g.id}"`}><td><b>${esc(cmap[g.concepto_id]?.nombre || '?')}</b></td><td>${esc(g.detalle || '')}</td><td class="hm small">${esc(g.comprobante || '')}</td>
@@ -1320,12 +1353,13 @@ function importarGastosModal(onDone){
 }
 
 GT.comparar = async el => {
+  setPrint('Gastos directos de Fábrica · Comparación de períodos', () => [['Desde', fdi(V('#d'))], ['Hasta', fdi(V('#h'))], ['Valores', segTxt('#ver')]]);
   const d0 = new Date(); d0.setDate(1); d0.setMonth(d0.getMonth() - 11);
   const desde = VISTAS._gDesde || d0.toISOString().slice(0,7), hasta = VISTAS._gHasta || mesActual();
   el.innerHTML = `<div class="bar"><label class="small">Desde</label><input type="month" id="d" value="${desde}" style="max-width:170px"><label class="small">Hasta</label><input type="month" id="h" value="${hasta}" style="max-width:170px">
     <div class="seg" id="ver"><button data-v="asig" class="on">Importes asignados</button><button data-v="lt">$ por litro</button></div>
-    <button class="btn sec" id="xls">Excel</button><button class="btn sec" onclick="window.print()">Imprimir</button></div>
-    <div class="printhead"><b>Uxell · Gastos directos de Fábrica · ${desde} a ${hasta}</b></div><div id="out"></div>`;
+    <button class="btn sec" id="xls">Excel</button><button class="btn sec" onclick="imprimir()">Imprimir</button></div>
+    <div id="out"></div>`;
   const [conc, G, T] = await Promise.all([conceptosGasto(),
     fetchAll(() => sb.from('gastos_fabrica').select('periodo,concepto_id,importe_ars,importe_asignado_ars').gte('periodo', desde + '-01').lte('periodo', hasta + '-01')),
     fetchAll(() => sb.from('v_gastos_fabrica_mes').select('*').gte('periodo', desde + '-01').lte('periodo', hasta + '-01').order('periodo')) ]);
@@ -1364,12 +1398,12 @@ GT.comparar = async el => {
 };
 
 GT.egresos = async el => {
+  setPrint('Gastos directos de Fábrica · Listado por egreso', () => [['Desde', fdi(V('#d'))], ['Hasta', fdi(V('#h'))], ['Concepto', selTxt('#c')], ['Búsqueda', V('#q')]]);
   const d0 = new Date(); d0.setDate(1); d0.setMonth(d0.getMonth() - 11);
   const conc = await conceptosGasto(); const cmap = Object.fromEntries(conc.map(c => [c.id, c]));
   el.innerHTML = `<div class="bar"><label class="small">Desde</label><input type="month" id="d" value="${d0.toISOString().slice(0,7)}" style="max-width:170px"><label class="small">Hasta</label><input type="month" id="h" value="${mesActual()}" style="max-width:170px">
     <select id="c" style="max-width:260px"><option value="">Todos los conceptos</option>${conc.map(c => `<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}</select>
-    <input class="grow" id="q" placeholder="Buscar en detalle o comprobante…"><button class="btn sec" id="xls">Excel</button><button class="btn sec" onclick="window.print()">Imprimir</button></div>
-    <div class="printhead"><b>Uxell · Gastos directos de Fábrica · listado por egreso</b></div>
+    <input class="grow" id="q" placeholder="Buscar en detalle o comprobante…"><button class="btn sec" id="xls">Excel</button><button class="btn sec" onclick="imprimir()">Imprimir</button></div>
     <div class="card"><div class="tw" id="tb"></div></div>`;
   let rows = [];
   const load = async () => { rows = await fetchAll(() => { let q = sb.from('gastos_fabrica').select('*').gte('periodo', $('#d', el).value + '-01').lte('periodo', $('#h', el).value + '-01').order('periodo', { ascending:false }).order('id');
@@ -1404,12 +1438,12 @@ VISTAS.informes = async app => {
 const INF = {};
 
 INF.costos = async el => {
+  setPrint('Lista de costos por producto', () => [['Tipo', selTxt('#t')], ['Búsqueda', V('#q')], ['Moneda', chkd('#pesos') ? 'pesos (al dólar BNA ' + nf(S.dolar,2) + ')' : 'dólares (U$S)']]);
   const rows = await fetchAll(() => sb.from('v_lista_costos').select('*'));
   el.innerHTML = `<div class="bar"><input class="grow" id="q" placeholder="Buscar…">
     <select id="t" style="max-width:220px"><option value="">Todos</option><option value="producto">Productos terminados</option><option value="interno">Fabricación interna</option></select>
     <label class="small nowrap"><input type="checkbox" id="pesos" style="width:auto"> Mostrar en pesos</label>
-    <button class="btn sec" id="xls">Excel</button><button class="btn sec" onclick="window.print()">Imprimir</button></div>
-    <div class="printhead"><b>Uxell · Lista de costos</b> — ${fd(hoy())} · Dólar ${nf(S.dolar,2)}</div>
+    <button class="btn sec" id="xls">Excel</button><button class="btn sec" onclick="imprimir()">Imprimir</button></div>
     <p class="small muted">Costo de la <b>última partida</b> de cada producto, por litro real producido.<br>① <b>Granel</b> · ② <b>Con envase de 1 litro</b>: granel + el envase de 1 lt que le corresponde (<b>PL 1</b> plástico o <b>HL 1</b> hojalata, según en qué se envasa el producto; se puede fijar en Editar item) · ③ <b>Con Gastos directos de Fábrica</b>: ② + los gastos del mes repartidos por litro (aparece cuando el mes tiene gastos cargados).</p>
     <div class="card"><div class="tw" id="tb"></div></div>`;
   const draw = () => {
@@ -1427,18 +1461,21 @@ INF.costos = async el => {
     $$('tr[data-p]', el).forEach(tr => tr.onclick = () => { informe = 'evo'; VISTAS._evoProd = Number(tr.dataset.p); VISTAS.informes($('#app')); });
   };
   ['q','t','pesos'].forEach(k => $('#'+k, el).addEventListener('input', draw)); $('#t', el).onchange = draw;
-  $('#xls', el).onclick = () => descargarXLSX('Lista_costos_' + hoy(), { 'Costos': rows.map(r => ({ Codigo: r.producto_codigo, Producto: r.producto_nombre, Partida: r.nro, Fecha: r.fecha,
+  $('#xls', el).onclick = () => { const q = $('#q', el).value.trim().toUpperCase(), t = $('#t', el).value;
+    const fx = rows.filter(r => (!t || r.producto_tipo === t) && (!q || (r.producto_codigo + ' ' + r.producto_nombre).toUpperCase().includes(q))).sort((a,b) => a.producto_codigo.localeCompare(b.producto_codigo, 'es', {numeric:true}));
+    descargarXLSX('Lista_costos_' + hoy(), { 'Costos': fx.map(r => ({ Codigo: r.producto_codigo, Producto: r.producto_nombre, Partida: r.nro, Fecha: r.fecha,
     'Granel USD/lt': r.costo_granel_lt_usd, 'Envase 1 lt': r.envase_ref ? r.envase_ref + ' 1' : '', 'Envase 1 lt USD': r.envase1_usd, 'Con envase 1 lt USD/lt': r.costo_env1_lt_usd,
     'Con gastos fábrica USD/lt': r.costo_total1_lt_usd, 'Dolar': S.dolar, 'Granel $/lt': r.costo_granel_lt_usd * S.dolar,
-    'Con envase 1 lt $/lt': r.costo_env1_lt_usd != null ? r.costo_env1_lt_usd * S.dolar : null, 'Precio venta $/lt': r.precio_venta_lt_ars })) });
+    'Con envase 1 lt $/lt': r.costo_env1_lt_usd != null ? r.costo_env1_lt_usd * S.dolar : null, 'Precio venta $/lt': r.precio_venta_lt_ars })) }); };
   draw();
 };
 
 INF.evo = async el => {
   let pid = VISTAS._evoProd;
+  setPrint('Evolución del costo de un producto', () => [['Producto', pid ? S.itemById[pid].codigo + ' · ' + S.itemById[pid].nombre : 'sin elegir'], ['Desde', fd(V('#desde'))]]);
   el.innerHTML = `<div class="bar"><button class="btn sec" id="pick">${pid ? esc(S.itemById[pid].codigo + ' · ' + S.itemById[pid].nombre) : 'Elegir producto…'}</button>
-    <input type="date" id="desde" style="max-width:170px" value="${new Date(Date.now()-3*365*864e5).toISOString().slice(0,10)}"><button class="btn sec" onclick="window.print()">Imprimir</button></div>
-    <div class="printhead"><b>Uxell · Evolución del costo — ${pid ? esc(S.itemById[pid].codigo + ' ' + S.itemById[pid].nombre) : ''}</b></div><div id="out"></div>`;
+    <input type="date" id="desde" style="max-width:170px" value="${new Date(Date.now()-3*365*864e5).toISOString().slice(0,10)}"><button class="btn sec" onclick="imprimir()">Imprimir</button></div>
+    <div id="out"></div>`;
   $('#pick', el).onclick = async () => { const x = await pickItem({ tipos:['producto','interno'], titulo:'Producto' }); if (x) { VISTAS._evoProd = x.id; INF.evo(el); } };
   if (!pid) { $('#out', el).innerHTML = '<p class="muted">Elegí un producto para ver cómo evolucionó su costo.</p>'; return; }
   const draw = async () => {
@@ -1459,11 +1496,12 @@ INF.evo = async el => {
 };
 
 INF.gasto = async el => {
+  setPrint('Gasto en materia prima', () => [['Desde', fd(V('#d'))], ['Hasta', fd(V('#h'))], ['Agrupado', segTxt('#ag')]]);
   const d0 = new Date(); d0.setMonth(d0.getMonth() - 11, 1);
   el.innerHTML = `<div class="bar"><input type="date" id="d" value="${d0.toISOString().slice(0,10)}" style="max-width:170px"><input type="date" id="h" value="${hoy()}" style="max-width:170px">
     <div class="seg" id="ag"><button data-a="mes" class="on">Por mes</button><button data-a="insumo">Por insumo</button><button data-a="prov">Por proveedor</button></div>
-    <button class="btn sec" id="xls">Excel</button><button class="btn sec" onclick="window.print()">Imprimir</button></div>
-    <div class="printhead"><b>Uxell · Gasto en materia prima</b></div><div id="out"></div>`;
+    <button class="btn sec" id="xls">Excel</button><button class="btn sec" onclick="imprimir()">Imprimir</button></div>
+    <div id="out"></div>`;
   let ag = 'mes', rows = [];
   const pmap = Object.fromEntries(S.prov.map(p => [p.id, p.nombre]));
   const load = async () => { rows = await fetchAll(() => sb.from('compras').select('fecha,item_id,proveedor_id,cantidad,moneda,precio_unit,cotizacion,total_usd,flete,seguro,otros_gastos').gte('fecha', $('#d', el).value).lte('fecha', $('#h', el).value)); draw(); };
@@ -1489,10 +1527,11 @@ INF.gasto = async el => {
 };
 
 INF.prod = async el => {
+  setPrint('Producción por mes', () => [['Desde', fd(V('#d'))], ['Hasta', fd(V('#h'))], ['Producto', V('#q')]]);
   const d0 = new Date(); d0.setMonth(d0.getMonth() - 11, 1);
   el.innerHTML = `<div class="bar"><input type="date" id="d" value="${d0.toISOString().slice(0,10)}" style="max-width:170px"><input type="date" id="h" value="${hoy()}" style="max-width:170px">
-    <input class="grow" id="q" placeholder="Filtrar producto…"><button class="btn sec" id="xls">Excel</button><button class="btn sec" onclick="window.print()">Imprimir</button></div>
-    <div class="printhead"><b>Uxell · Producción por mes</b></div><div id="out"></div>`;
+    <input class="grow" id="q" placeholder="Filtrar producto…"><button class="btn sec" id="xls">Excel</button><button class="btn sec" onclick="imprimir()">Imprimir</button></div>
+    <div id="out"></div>`;
   let rows = [];
   const load = async () => { rows = await fetchAll(() => sb.from('partidas').select('fecha,producto_id,litros_producidos').eq('estado','cerrada').gte('fecha', $('#d', el).value).lte('fecha', $('#h', el).value)); draw(); };
   const draw = () => {
@@ -1515,8 +1554,12 @@ INF.prod = async el => {
 
 INF.precio = async el => {
   let iid = VISTAS._evoIns;
+  setPrint('Evolución del precio de materia prima', () => { if (!iid) return [['Materia prima', 'sin elegir']];
+    const it = S.itemById[iid], cods = it.mp_base_id ? S.items.filter(i => i.mp_base_id === it.mp_base_id) : [it];
+    return [['Materia prima', cods.length > 1 ? (S.baseById[it.mp_base_id]?.nombre || '') : it.codigo + ' · ' + it.nombre],
+            ['Códigos incluidos', cods.length > 1 ? cods.map(c => c.codigo).join(', ') : ''], ['Desde', fd(V('#desde'))]]; });
   el.innerHTML = `<div class="bar"><button class="btn sec" id="pick">${iid ? esc(S.itemById[iid].codigo + ' · ' + S.itemById[iid].nombre) : 'Elegir insumo…'}</button>
-    <input type="date" id="desde" style="max-width:170px" value="${new Date(Date.now()-3*365*864e5).toISOString().slice(0,10)}"><button class="btn sec" onclick="window.print()">Imprimir</button></div><div id="out"></div>`;
+    <input type="date" id="desde" style="max-width:170px" value="${new Date(Date.now()-3*365*864e5).toISOString().slice(0,10)}"><button class="btn sec" onclick="imprimir()">Imprimir</button></div><div id="out"></div>`;
   $('#pick', el).onclick = async () => { const x = await pickItem({ tipos:['mp','envase','interno'], titulo:'Insumo' }); if (x) { VISTAS._evoIns = x.id; INF.precio(el); } };
   if (!iid) { $('#out', el).innerHTML = '<p class="muted">Elegí un insumo para ver cómo evolucionó su precio (valuaciones, compras y lo usado en cada partida). Si es parte de una materia prima base, se muestran todos sus códigos juntos.</p>'; return; }
   const itx = S.itemById[iid], ids = itx.mp_base_id ? S.items.filter(i => i.mp_base_id === itx.mp_base_id).map(i => i.id) : [iid];
@@ -1534,7 +1577,7 @@ INF.precio = async el => {
     new Chart($('#ch', el), { type:'line', data:{ datasets:[
       { label:'Costo usado en partidas', data: ser.map(([f,v]) => ({x:f, y:v})), borderColor:'#6b2fd6', stepped:true, pointRadius:1 },
       { label:'Compras (U$S/u)', data: c.map(x => ({x:x.fecha, y: Number(x.costo_con_gastos_usd ?? x.precio_unit_usd)})), borderColor:'#e0a800', backgroundColor:'#e0a800', showLine:false, pointRadius:4 },
-      { label:'Relevamientos mensuales, compras y reposición', data: h.filter(x => x.origen !== 'partida').map(x => ({x:x.fecha, y:Number(x.costo_usd)})), borderColor:'#1f9d55', backgroundColor:'#1f9d55', showLine:false, pointRadius:4, pointStyle:'rect' } ] },
+      { label:'Relevamientos mensuales y reposición', data: h.filter(x => x.origen !== 'partida').map(x => ({x:x.fecha, y:Number(x.costo_usd)})), borderColor:'#1f9d55', backgroundColor:'#1f9d55', showLine:false, pointRadius:4, pointStyle:'rect' } ] },
       options:{ maintainAspectRatio:false, scales:{ x:{ type:'category', labels:[...new Set([...ser.map(s=>s[0]), ...c.map(x=>x.fecha), ...h.map(x=>x.fecha)])].sort() } } } });
   };
   $('#desde', el).onchange = draw; await draw();
@@ -1641,9 +1684,20 @@ async function excelProduccion(desde, hastaExcl, titulo, sufijo){
   XLSX.writeFile(wb, `Uxell_Partidas_fabricadas_${sufijo}.xlsx`);
 }
 
-function descargarXLSX(nombre, hojas){
+function descargarXLSX(nombre, hojas, opc = {}){
   const wb = XLSX.utils.book_new();
-  Object.entries(hojas).forEach(([n, rows]) => XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), n.slice(0,31)));
+  const f = filtrosLista();
+  Object.entries(hojas).forEach(([n, rows]) => {
+    let ws;
+    if (opc.sinEncabezado) ws = XLSX.utils.json_to_sheet(rows);
+    else {
+      ws = XLSX.utils.aoa_to_sheet([[`ÜXELL PINTURAS — ${PRINT.titulo}`], [`Emitido el ${fd(hoy())} · Dólar BNA ${S.dolar ? nf(S.dolar,2) : '—'}`],
+        [f.length ? 'Filtros: ' + f.map(([k, v]) => `${k}: ${v}`).join(' · ') : 'Sin filtros'], []]);
+      XLSX.utils.sheet_add_json(ws, rows, { origin: 'A5' });
+      const cols = Object.keys(rows[0] || {}); ws['!cols'] = cols.map(c => ({ wch: Math.max(10, Math.min(45, c.length + 4)) }));
+    }
+    XLSX.utils.book_append_sheet(wb, ws, n.slice(0,31));
+  });
   XLSX.writeFile(wb, nombre + '.xlsx');
 }
 
@@ -1846,7 +1900,7 @@ async function respaldo(){
   const tablas = ['mp_base','items','proveedores','cotizaciones','compras','valuaciones','recetas','receta_lineas','partidas','partida_insumos','partida_envases','movimientos_stock','gastos_mes','conceptos_gasto','gastos_fabrica','precios_venta'];
   const hojas = {};
   for (const t of tablas) hojas[t] = await fetchAll(() => sb.from(t).select('*'));
-  descargarXLSX('Respaldo_Uxell_Costos_' + hoy(), hojas);
+  descargarXLSX('Respaldo_Uxell_Costos_' + hoy(), hojas, { sinEncabezado: true });
 }
 
 // =====================================================================
