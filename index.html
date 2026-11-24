@@ -269,7 +269,7 @@ async function recargarItems(){
 function pintarDolar(){
   const h = $('#hdrDolar'); h.classList.remove('hidden');
   h.innerHTML = S.dolar ? `U$S ${ars(S.dolar,0)} <span class="dfe" style="opacity:.6">${fd(S.dolarFecha)}</span>` : 'Cargar dólar';
-  h.onclick = editarDolar;
+  h.onclick = (can('compras') || can('precios') || can('produccion') || can('gastos')) ? editarDolar : null; h.style.cursor = h.onclick ? 'pointer' : 'default';
 }
 function editarDolar(){
   modal(`<h2>Dólar oficial BNA</h2><p class="muted small">Se usa para pasar a pesos y como sugerencia en compras y producción.</p>
@@ -371,7 +371,7 @@ VISTAS.inicio = async app => {
   const nombreMes = new Date().toLocaleDateString('es-AR', { month:'long' });
 
   app.innerHTML = `
-    <div class="hero"><img src="logo.png" alt="Üxell"><div><div class="t">Tablero de producción</div><div class="s">Hola ${esc(S.perfil.nombre || '')} · ${new Date().toLocaleDateString('es-AR', { weekday:'long', day:'numeric', month:'long' })}</div></div></div>
+    <div class="hero"><img src="logo.png" alt="Üxell"><div><div class="t">Tablero de producción${!['compras','precios','recetas','produccion','gastos'].some(can) ? ' <span class="badge b-gray" style="vertical-align:middle">Solo consulta</span>' : ''}</div><div class="s">Hola ${esc(S.perfil.nombre || '')} · ${new Date().toLocaleDateString('es-AR', { weekday:'long', day:'numeric', month:'long' })}</div></div></div>
     <div class="grid" style="margin-bottom:12px">
       <div class="kpi"><div class="l">Litros fabricados en ${nombreMes}</div><div class="v">${nf(mesAct.litros,0)}</div><div class="l">${mesAct.partidas} partidas</div></div>
       <div class="kpi"><div class="l">Promedio últimos 5 meses</div><div class="v">${nf(lista5.reduce((s,p) => s + Number(porMes[p]?.litros||0), 0) / 5, 0)}</div><div class="l">litros por mes</div></div>
@@ -1739,10 +1739,23 @@ VISTAS.config = async app => {
   const ci = $('#ciFile', app); if (ci) ci.onchange = () => guard(() => cargaInicial(ci.files[0], $('#ciOut', app)));
   if (isAdmin()) {
     const us = chk(await sb.from('perfiles').select('*').order('creado_en'));
-    const P = [['es_admin','Admin (todo)'],['p_compras','Compras'],['p_precios','Precios'],['p_recetas','Recetas'],['p_produccion','Producción'],['p_gastos','Gastos fábrica'],['activo','Activo']];
-    $('#us', app).innerHTML = `<table><thead><tr><th>Usuario</th>${P.map(p => `<th>${p[1]}</th>`).join('')}</tr></thead><tbody>${us.map(u => `<tr><td><input value="${esc(u.nombre||'')}" data-n="${u.id}" style="min-width:120px"><div class="small muted">${esc(u.email)}</div></td>${P.map(p => `<td><input type="checkbox" style="width:auto" data-u="${u.id}" data-k="${p[0]}" ${u[p[0]]?'checked':''} ${u.id===S.user.id && (p[0]==='es_admin'||p[0]==='activo') ? 'disabled':''}></td>`).join('')}</tr>`).join('')}</tbody></table>
-      <p class="small muted">Sugerido: Verónica → Compras + Precios · Romina → Precios + Recetas + Producción · Ingeniero → Recetas + Producción · Diego, Franco y Agustín → Admin.</p>`;
-    $$('[data-u]', app).forEach(c => c.onchange = () => guard(async () => { chk(await sb.from('perfiles').update({ [c.dataset.k]: c.checked }).eq('id', c.dataset.u)); toast('Permiso actualizado'); }));
+    const P = [['es_admin','Admin (todo)'],['p_compras','Compras'],['p_precios','Precios'],['p_recetas','Recetas'],['p_produccion','Producción'],['p_gastos','Gastos fábrica']];
+    const soloConsulta = u => u.activo && !u.es_admin && !P.slice(1).some(([k]) => u[k]);
+    const rol = u => !u.activo ? '<span class="badge b-bad">Sin acceso</span>' : u.es_admin ? '<span class="badge b-info">Administrador</span>' : soloConsulta(u) ? '<span class="badge b-gray">Solo consulta</span>' : '<span class="badge b-ok">Carga</span>';
+    const pend = us.filter(u => !u.activo);
+    $('#us', app).innerHTML = `${pend.length ? `<div class="alert">Hay ${pend.length} usuario(s) esperando habilitación: ${pend.map(u => esc(u.email)).join(', ')}. Tildá <b>Activo</b> y sus permisos, o <b>Solo consulta</b>.</div>` : ''}
+      <table><thead><tr><th>Usuario</th><th>Rol</th><th title="Puede entrar a la app">Activo</th><th title="Puede ver todo pero no cargar ni modificar nada">Solo consulta</th>${P.map(p => `<th>${p[1]}</th>`).join('')}</tr></thead><tbody>${us.map(u => { const yo = u.id === S.user.id;
+        return `<tr><td><input value="${esc(u.nombre||'')}" data-n="${u.id}" style="min-width:120px"><div class="small muted">${esc(u.email)}</div></td><td>${rol(u)}</td>
+        <td><input type="checkbox" style="width:auto" data-u="${u.id}" data-k="activo" ${u.activo?'checked':''} ${yo?'disabled':''}></td>
+        <td><input type="checkbox" style="width:auto" data-sc="${u.id}" ${soloConsulta(u)?'checked':''} ${yo?'disabled':''}></td>
+        ${P.map(p => `<td><input type="checkbox" style="width:auto" data-u="${u.id}" data-k="${p[0]}" ${u[p[0]]?'checked':''} ${yo && p[0]==='es_admin' ? 'disabled':''}></td>`).join('')}</tr>`; }).join('')}</tbody></table>
+      <p class="small muted"><b>Solo consulta</b>: ve todas las pantallas e informes, imprime y descarga Excel, pero no puede cargar ni modificar nada (ideal para directivos). <b>Activo</b> destildado: no puede entrar.<br>
+      Los usuarios nuevos quedan <b>sin acceso</b> hasta que un administrador los habilite acá.</p>`;
+    $$('[data-u]', app).forEach(c => c.onchange = () => guard(async () => { chk(await sb.from('perfiles').update({ [c.dataset.k]: c.checked }).eq('id', c.dataset.u)); toast('Permiso actualizado'); VISTAS.config(app); }));
+    $$('[data-sc]', app).forEach(c => c.onchange = () => guard(async () => {
+      if (c.checked) { chk(await sb.from('perfiles').update({ activo: true, es_admin: false, p_compras: false, p_precios: false, p_recetas: false, p_produccion: false, p_gastos: false }).eq('id', c.dataset.sc)); toast('Ahora es solo consulta: puede ver pero no cargar'); }
+      else toast('Tildá los permisos de carga que necesite');
+      VISTAS.config(app); }));
     $$('[data-n]', app).forEach(c => c.onchange = () => guard(async () => { chk(await sb.from('perfiles').update({ nombre: c.value }).eq('id', c.dataset.n)); toast('Nombre guardado'); }));
   }
 };
