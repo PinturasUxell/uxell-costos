@@ -374,6 +374,7 @@ VISTAS.inicio = async app => {
   const borradores = chk(borr), M = chk(meses), PM = chk(prodMes), CM = chk(consMes);
   const [gfMes, gfTot, gfConc] = await Promise.all([sb.from('gastos_fabrica').select('*').eq('periodo', mesIni).order('id'), sb.from('v_gastos_fabrica_mes').select('*').eq('periodo', mesIni).maybeSingle(), conceptosGasto()]);
   const GFm = chk(gfMes), GFt = gfTot.data, gcm = Object.fromEntries(gfConc.map(c => [c.id, c]));
+  const puedeCtrl = can('precios') || can('compras');
   const viejos = rev.filter(r => r.tipo !== 'interno' && r.control_valor !== false && (r.dias == null || r.dias > 60)).sort((a,b) => (b.dias ?? 99999) - (a.dias ?? 99999));
   const neg = stock.filter(r => r.stock < 0);
   const lista5 = []; for (let i = 4; i >= 0; i--) { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i); lista5.push(d.toISOString().slice(0,7) + '-01'); }
@@ -414,7 +415,8 @@ VISTAS.inicio = async app => {
           <p class="small" style="margin:6px 0 0">Por litro: <b>${GFt?.ars_lt ? ars(GFt.ars_lt, 2) : '—'}</b>${GFt?.usd_lt ? ' · ' + usd(GFt.usd_lt, 4) : ''} · <a href="#gastos">Ver / cargar</a></p>`
           : `<p class="muted small">Todavía no se cargaron gastos este mes. <a href="#gastos">Cargar Gastos directos de Fábrica</a></p>`}</div>
       <div class="card"><h2>Precios con más de 60 días sin actualizar <span class="badge b-bad">${viejos.length}</span></h2>
-        ${viejos.length ? `<div class="minitw"><table><thead><tr><th>Insumo / envase</th><th class="n">U$S</th><th>Última valuación</th></tr></thead><tbody>${viejos.map(r => `<tr class="click" data-v="${r.item_id}"><td><b>${esc(r.codigo)}</b> <span class="small">${esc(r.nombre)}</span></td><td class="n">${nf(r.costo_usd,3)}</td><td class="nowrap">${r.fecha ? fd(r.fecha) : ''} ${edadBadge(r.dias)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="small" style="color:var(--ok)">Todos los precios están actualizados ✅</p>'}</div>
+        ${viejos.length ? `<div class="minitw"><table><thead><tr><th>Insumo / envase</th><th class="n">U$S</th><th>Última valuación</th>${puedeCtrl ? '<th title="Destildar si es un producto viejo o que ya no se compra">Controlar</th><th></th>' : ''}</tr></thead><tbody>${viejos.map(r => `<tr class="click" data-v="${r.item_id}"><td><b>${esc(r.codigo)}</b> <span class="small">${esc(r.nombre)}</span></td><td class="n">${nf(r.costo_usd,3)}</td><td class="nowrap">${r.fecha ? fd(r.fecha) : ''} ${edadBadge(r.dias)}</td>${puedeCtrl ? `<td style="text-align:center"><input type="checkbox" checked data-nc="${r.item_id}" style="width:auto" title="Destildar: deja de controlar la antigüedad de este precio"></td><td><button class="btn ghost sm" data-ed="${r.item_id}" title="Editar materia prima">✎</button></td>` : ''}</tr>`).join('')}</tbody></table></div>
+          ${puedeCtrl ? '<p class="small muted" style="margin:6px 0 0">Destildá <b>Controlar</b> en los productos viejos o que ya no se compran: salen de esta lista. Para volver a activarlos: Precios → "Ver también sin control de valor".</p>' : ''}` : '<p class="small" style="color:var(--ok)">Todos los precios están actualizados ✅</p>'}</div>
       <div class="card"><h2>Stock de materias primas ${neg.length ? `<span class="badge b-bad">${neg.length} negativos</span>` : ''}</h2>
         <input id="qStock" placeholder="Buscar materia prima…" style="margin-bottom:6px">
         <div class="minitw" id="tbStock"></div>
@@ -436,7 +438,9 @@ VISTAS.inicio = async app => {
       <td>${!r.tiene_inicial ? '<span class="badge b-gray">sin inicial</span>' : r.stock < 0 ? '<span class="badge b-bad">negativo</span>' : r.stock_minimo && r.stock < r.stock_minimo ? '<span class="badge b-warn">bajo mín.</span>' : '<span class="badge b-ok">ok</span>'}</td></tr>`).join('')}</tbody></table>`;
     $$('[data-s]', app).forEach(tr => tr.onclick = () => fichaBase(Number(tr.dataset.s))); };
   $('#qStock', app).oninput = drawStock; drawStock();
-  $$('[data-v]', app).forEach(tr => tr.onclick = () => fichaPrecio(Number(tr.dataset.v), () => VISTAS.inicio(app)));
+  $$('[data-v]', app).forEach(tr => tr.onclick = e => { if (e.target.closest('[data-nc],[data-ed]')) return; fichaPrecio(Number(tr.dataset.v), () => VISTAS.inicio(app)); });
+  $$('[data-nc]', app).forEach(c => c.onchange = () => guard(async () => { await setControl(c.dataset.nc, c.checked); if (!c.checked) VISTAS.inicio(app); }));
+  $$('[data-ed]', app).forEach(b => b.onclick = e => { e.stopPropagation(); editarItem(Number(b.dataset.ed), null, () => VISTAS.inicio(app)); });
   const a = $('#actDolar', app); if (a) a.onclick = e => { e.preventDefault(); editarDolar(); };
   $$('[data-p]', app).forEach(x => x.onclick = e => { e.preventDefault(); location.hash = 'produccion'; setTimeout(() => editorPartida(Number(x.dataset.p)), 300); });
 };
@@ -611,27 +615,33 @@ VISTAS.precios = async app => {
   const draw = () => {
     $$('#seg button', app).forEach(b => b.classList.toggle('on', b.dataset.t === filtroPrecio.tipo));
     const q = filtroPrecio.q.toUpperCase();
+    const puedeCtrl = can('precios') || can('compras');
     if (filtroPrecio.tipo === 'base') {
       const pb = Object.fromEntries(pbase.map(x => [x.mp_base_id, x]));
       const f = S.bases.map(b => ({ b, p: pb[b.id], cods: S.items.filter(i => i.mp_base_id === b.id && (filtroPrecio.sinCtrl || i.control_valor !== false)) })).filter(x => x.cods.length
         && (!filtroPrecio.viejos || !x.p || x.p.dias > 30) && (!q || (x.b.nombre + ' ' + x.cods.map(c => c.codigo + ' ' + c.nombre).join(' ')).toUpperCase().includes(q)));
-      $('#tabla', app).innerHTML = `<table><thead><tr><th>Materia prima</th><th class="hm">Códigos</th><th class="n">Último U$S</th><th class="n hm">$</th><th>Código / fecha</th><th>Antigüedad</th></tr></thead><tbody>${
-        f.map(x => `<tr class="click" data-b="${x.b.id}"><td><b>${esc(x.b.nombre)}</b></td><td class="hm small">${x.cods.length > 1 ? `<span class="badge b-info">${x.cods.length} códigos</span> ` : ''}${esc(x.cods.map(c => c.codigo).join(', '))}</td>
+      $('#tabla', app).innerHTML = `<table><thead><tr><th>Materia prima</th><th class="hm">Códigos</th><th class="n">Último U$S</th><th class="n hm">$</th><th>Código / fecha</th><th>Antigüedad</th><th title="Control de valor: destildar si ya no se compra">Control</th>${puedeCtrl ? '<th></th>' : ''}</tr></thead><tbody>${
+        f.map(x => `<tr class="click" data-b="${x.b.id}" style="${x.cods.every(c => c.control_valor === false) ? 'opacity:.5' : ''}"><td><b>${esc(x.b.nombre)}</b></td><td class="hm small">${x.cods.length > 1 ? `<span class="badge b-info">${x.cods.length} códigos</span> ` : ''}${esc(x.cods.map(c => c.codigo).join(', '))}</td>
           <td class="n">${x.p ? nf(x.p.costo_usd,4) : '—'}</td><td class="n hm">${x.p && S.dolar ? nf(x.p.costo_usd * S.dolar, 2) : '—'}</td>
-          <td class="small">${x.p ? esc(x.p.codigo) + ' · ' + fd(x.p.fecha) : ''}</td><td>${edadBadge(x.p ? x.p.dias : null)}</td></tr>`).join('')}</tbody></table><p class="small muted">${f.length} materias primas</p>`;
-      $$('tr[data-b]', app).forEach(tr => tr.onclick = () => fichaBase(Number(tr.dataset.b)));
+          <td class="small">${x.p ? esc(x.p.codigo) + ' · ' + fd(x.p.fecha) : ''}</td><td>${edadBadge(x.p ? x.p.dias : null)}</td>
+          <td><input type="checkbox" data-cb="${x.b.id}" style="width:auto" ${x.cods.some(c => c.control_valor !== false) ? 'checked' : ''} ${puedeCtrl ? '' : 'disabled'}></td>
+          ${puedeCtrl ? `<td><button class="btn ghost sm" data-eb="${x.b.id}">✎ Editar</button></td>` : ''}</tr>`).join('')}</tbody></table><p class="small muted">${f.length} materias primas · <b>✎ Editar</b> para cambiar nombre, unidad, códigos o eliminarla · destildá <b>Control</b> en las que ya no se compran.</p>`;
+      $$('tr[data-b]', app).forEach(tr => tr.onclick = e => { if (e.target.closest('[data-cb],[data-eb]')) return; fichaBase(Number(tr.dataset.b)); });
+      $$('[data-cb]', app).forEach(c => c.onchange = () => guard(async () => { await setControl(S.items.filter(i => i.mp_base_id === Number(c.dataset.cb)).map(i => i.id), c.checked); draw(); }));
+      $$('[data-eb]', app).forEach(b => b.onclick = e => { e.stopPropagation(); const cods = S.items.filter(i => i.mp_base_id === Number(b.dataset.eb));
+        if (cods.length === 1) editarItem(cods[0].id, null, () => VISTAS.precios(app)); else fichaBase(Number(b.dataset.eb)); });
       return;
     }
-    const puedeCtrl = can('precios') || can('compras');
     const f = rows.filter(r => r.tipo === filtroPrecio.tipo && (filtroPrecio.sinCtrl || r.control_valor !== false) && (!filtroPrecio.viejos || r.dias == null || r.dias > 30)
       && (!q || (r.codigo + ' ' + r.nombre).toUpperCase().includes(q)));
-    $('#tabla', app).innerHTML = `<table><thead><tr><th>Código</th><th>Nombre</th><th>Unid</th><th class="n">U$S / unid</th><th class="n hm">$ / unid</th><th class="hm">Fecha valuación</th><th>Antigüedad</th><th>Origen</th><th title="Control de valor">Control</th></tr></thead><tbody>${
+    $('#tabla', app).innerHTML = `<table><thead><tr><th>Código</th><th>Nombre</th><th>Unid</th><th class="n">U$S / unid</th><th class="n hm">$ / unid</th><th class="hm">Fecha valuación</th><th>Antigüedad</th><th>Origen</th><th title="Control de valor">Control</th>${puedeCtrl ? '<th></th>' : ''}</tr></thead><tbody>${
       f.map(r => `<tr class="click" data-id="${r.item_id}" style="${r.control_valor === false ? 'opacity:.5' : ''}"><td><b>${esc(r.codigo)}</b></td><td>${esc(r.nombre)}</td><td>${esc(r.unidad)}</td>
         <td class="n">${nf(r.costo_usd,4)}</td><td class="n hm">${r.costo_usd!=null && S.dolar ? nf(r.costo_usd*S.dolar,2) : '—'}</td>
         <td class="hm">${fd(r.fecha)}</td><td>${edadBadge(r.dias)}</td><td>${origenBadge(r.origen)}${r.con_gastos ? ' <span class="badge b-info">c/flete</span>' : ''}</td>
-        <td><input type="checkbox" data-ctrl="${r.item_id}" style="width:auto" ${r.control_valor !== false ? 'checked' : ''} ${puedeCtrl ? '' : 'disabled'} title="Control de valor"></td></tr>`).join('')
-    }</tbody></table><p class="small muted">${f.length} items · destildá "Control" en los que ya no se compran para que no aparezcan en los controles de precios.</p>`;
-    $$('tr[data-id]', app).forEach(tr => tr.onclick = e => { if (e.target.closest('[data-ctrl]')) return; fichaPrecio(Number(tr.dataset.id), () => VISTAS.precios(app)); });
+        <td><input type="checkbox" data-ctrl="${r.item_id}" style="width:auto" ${r.control_valor !== false ? 'checked' : ''} ${puedeCtrl ? '' : 'disabled'} title="Control de valor"></td>${puedeCtrl ? `<td><button class="btn ghost sm" data-ei="${r.item_id}">✎ Editar</button></td>` : ''}</tr>`).join('')
+    }</tbody></table><p class="small muted">${f.length} items · <b>✎ Editar</b> para modificar o eliminar · destildá "Control" en los que ya no se compran para que no aparezcan en los controles de precios.</p>`;
+    $$('[data-ei]', app).forEach(b => b.onclick = e => { e.stopPropagation(); editarItem(Number(b.dataset.ei), null, () => VISTAS.precios(app)); });
+    $$('tr[data-id]', app).forEach(tr => tr.onclick = e => { if (e.target.closest('[data-ctrl],[data-ei]')) return; fichaPrecio(Number(tr.dataset.id), () => VISTAS.precios(app)); });
     $$('[data-ctrl]', app).forEach(c => c.onchange = () => guard(async () => {
       chk(await sb.from('items').update({ control_valor: c.checked }).eq('id', Number(c.dataset.ctrl)));
       const r = rows.find(x => x.item_id === Number(c.dataset.ctrl)); if (r) r.control_valor = c.checked;
@@ -685,7 +695,7 @@ async function fichaPrecio(itemId, onDone){
 // Historial de precios y stock de una materia prima base (todos sus códigos)
 async function fichaBase(baseId){
   const b = S.baseById[baseId]; if (!b) return;
-  const cods = S.items.filter(i => i.mp_base_id === baseId); const ids = cods.map(i => i.id);
+  const cods = S.items.filter(i => i.mp_base_id === baseId); const ids = cods.map(i => i.id); const pc = can('precios') || can('compras');
   const [vals, comps, stk] = await Promise.all([
     fetchAll(() => sb.from('valuaciones').select('item_id,fecha,costo_usd,origen').in('item_id', ids).order('fecha', { ascending:false })),
     fetchAll(() => sb.from('compras').select('fecha,item_id,proveedor_id,cantidad,precio_unit_usd,costo_con_gastos_usd,lote_proveedor').in('item_id', ids).order('fecha', { ascending:false })),
@@ -694,8 +704,8 @@ async function fichaBase(baseId){
   const total = stk.reduce((s, x) => s + Number(x.stock), 0);
   modal(`<h2>${esc(b.nombre)}</h2><p class="muted small" style="margin-top:-6px">Materia prima base · ${cods.length} código(s) · stock total <b>${nf(total,1)} ${esc(b.unidad)}</b></p>
     <h3>Códigos (proveedor / variante)</h3>
-    <div class="tw"><table><thead><tr><th>Código</th><th>Nombre</th><th class="n">Stock</th><th class="n">Último U$S</th><th>Fecha</th></tr></thead><tbody>
-    ${cods.map(i => { const v = S.val[i.id]; return `<tr class="click" data-i="${i.id}"><td><b>${esc(i.codigo)}</b></td><td class="small">${esc(i.nombre)}</td><td class="n">${nf(smap[i.id] || 0, 1)}</td><td class="n">${v ? nf(v.costo_usd,3) : '—'}</td><td>${v ? fd(v.fecha) : ''}</td></tr>`; }).join('')}</tbody></table></div>
+    <div class="tw"><table><thead><tr><th>Código</th><th>Nombre</th><th class="n">Stock</th><th class="n">Último U$S</th><th>Fecha</th>${pc ? '<th>Control</th><th></th>' : ''}</tr></thead><tbody>
+    ${cods.map(i => { const v = S.val[i.id]; return `<tr class="click" data-i="${i.id}" style="${i.control_valor === false ? 'opacity:.55' : ''}"><td><b>${esc(i.codigo)}</b></td><td class="small">${esc(i.nombre)}</td><td class="n">${nf(smap[i.id] || 0, 1)}</td><td class="n">${v ? nf(v.costo_usd,3) : '—'}</td><td>${v ? fd(v.fecha) : ''}</td>${pc ? `<td><input type="checkbox" data-fc="${i.id}" style="width:auto" ${i.control_valor !== false ? 'checked' : ''}></td><td><button class="btn ghost sm" data-fe="${i.id}">✎ Editar</button></td>` : ''}</tr>`; }).join('')}</tbody></table></div>
     <h3>Evolución del precio (todos los proveedores)</h3>
     <div class="chartbox" style="height:200px"><canvas id="ch"></canvas></div>
     <h3>Compras</h3>
@@ -705,12 +715,21 @@ async function fichaBase(baseId){
     <div class="tw" style="max-height:220px"><table><thead><tr><th>Fecha</th><th>Código</th><th class="n">U$S</th><th>Origen</th></tr></thead><tbody>
     ${vals.map(v => `<tr><td>${fd(v.fecha)}</td><td>${esc(S.itemById[v.item_id]?.codigo)}</td><td class="n">${nf(v.costo_usd,4)}</td><td>${origenBadge(v.origen)}</td></tr>`).join('') || '<tr><td colspan=4 class="muted">Sin valuaciones</td></tr>'}</tbody></table></div>
     <div class="mfoot"><button class="btn sec" data-close>Cerrar</button></div>`, (el, close) => {
-    $$('[data-i]', el).forEach(tr => tr.onclick = () => { close(); fichaPrecio(Number(tr.dataset.i)); });
+    $$('[data-i]', el).forEach(tr => tr.onclick = e => { if (e.target.closest('[data-fc],[data-fe]')) return; close(); fichaPrecio(Number(tr.dataset.i)); });
+    $$('[data-fc]', el).forEach(c => c.onchange = () => guard(async () => { await setControl(c.dataset.fc, c.checked); c.closest('tr').style.opacity = c.checked ? '' : '.55'; }));
+    $$('[data-fe]', el).forEach(b => b.onclick = e => { e.stopPropagation(); close(); editarItem(Number(b.dataset.fe), null, () => { if (location.hash.includes('precios')) VISTAS.precios($('#app')); }); });
     const pts = vals.map(v => ({ x: v.fecha, y: Number(v.costo_usd) })).concat(comps.map(c => ({ x: c.fecha, y: Number(c.costo_con_gastos_usd ?? c.precio_unit_usd) }))).sort((a, b) => a.x.localeCompare(b.x));
     if (pts.length > 1) new Chart($('#ch', el), { type:'line', data:{ labels: pts.map(p => fd(p.x)), datasets:[{ data: pts.map(p => p.y), borderColor:'#6b2fd6', tension:.2, pointRadius:3 }] },
       options:{ maintainAspectRatio:false, plugins:{ legend:{ display:false } }, scales:{ y:{ title:{ display:true, text:'U$S' } } } } });
     else $('#ch', el).parentElement.innerHTML = '<p class="muted small">Todavía no hay suficiente historial.</p>';
   });
+}
+
+async function setControl(ids, valor){
+  ids = [].concat(ids).map(Number);
+  chk(await sb.from('items').update({ control_valor: valor }).in('id', ids));
+  ids.forEach(i => { const it = S.itemById[i]; if (it) it.control_valor = valor; });
+  toast(valor ? 'Control de valor activado' : 'Listo: ya no se controla la antigüedad de su precio');
 }
 
 function editarItem(id, tipoDef, onDone){
