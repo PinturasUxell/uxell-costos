@@ -901,7 +901,7 @@ VISTAS.produccion = async app => {
   const modoUI = () => { $$('#modo button', app).forEach(b => b.classList.toggle('on', b.dataset.m === modoProd));
     $('#selMes', app).style.display = modoProd === 'mes' ? '' : 'none'; $('#selPer', app).style.display = modoProd === 'per' ? '' : 'none'; };
   const draw = async () => {
-    const R = rango(); $('#phTxt', app).textContent = R.txt;
+    const R = rango();
     let rows = await fetchAll(() => sb.from('partidas').select('id,nro,fecha,lote,producto_id,cant_teorica,litros_producidos,litros_estimados,estado,origen,costo_granel_lt_usd,costo_envasado_lt_usd,costo_excel_lt_usd,horas_hombre')
       .gte('fecha', R.d).lt('fecha', R.h).order('nro', {ascending:false}));
     const q = $('#q', app).value.trim().toUpperCase();
