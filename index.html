@@ -385,7 +385,7 @@ VISTAS.inicio = async app => {
   const nombreMes = new Date().toLocaleDateString('es-AR', { month:'long' });
 
   app.innerHTML = `
-    <div class="hero"><img src="logo.png" alt="Üxell"><div><div class="t">Tablero de producción${!['compras','precios','recetas','produccion','gastos'].some(can) ? ' <span class="badge b-gray" style="vertical-align:middle">Solo consulta</span>' : ''}</div><div class="s">Hola ${esc(S.perfil.nombre || '')} · ${new Date().toLocaleDateString('es-AR', { weekday:'long', day:'numeric', month:'long' })}</div></div></div>
+    <div class="hero"><img src="logo.png" alt="Üxell"><div><div class="t">Tablero de producción${!['compras','precios','recetas','produccion','gastos'].some(can) ? ' <span class="badge b-gray" style="vertical-align:middle">Solo consulta</span>' : ''}</div><div class="s">Hola ${esc(S.perfil.nombre || '')} · ${new Date().toLocaleDateString('es-AR', { weekday:'long', day:'numeric', month:'long' })}</div><div class="s" style="font-size:11px;opacity:.7;margin-top:4px">Powered by Facundo Maneglia</div></div></div>
     <div class="grid" style="margin-bottom:12px">
       <div class="kpi"><div class="l">Litros fabricados en ${nombreMes}</div><div class="v">${nf(mesAct.litros,0)}</div><div class="l">${mesAct.partidas} partidas</div></div>
       <div class="kpi"><div class="l">Promedio últimos 5 meses</div><div class="v">${nf(lista5.reduce((s,p) => s + Number(porMes[p]?.litros||0), 0) / 5, 0)}</div><div class="l">litros por mes</div></div>
@@ -2004,7 +2004,8 @@ function pantallaLogin(msg){
     <label class="f">Email</label><input type="email" id="em" autocomplete="username">
     <label class="f" style="margin-top:8px">Contraseña</label><input type="password" id="pw" autocomplete="current-password">
     <div class="row" style="margin-top:12px"><button class="btn" id="in">Ingresar</button><button class="btn sec" id="reg">Crear cuenta</button></div>
-    <p class="small"><a href="#" id="olv">Olvidé mi contraseña</a></p></div>`;
+    <p class="small"><a href="#" id="olv">Olvidé mi contraseña</a></p>
+    <p class="small muted" style="text-align:center;margin:18px 0 0;letter-spacing:.3px">Powered by <b>Facundo Maneglia</b></p></div>`;
   const em = () => $('#em').value.trim(), pw = () => $('#pw').value;
   $('#in').onclick = () => guard(async () => { chk(await sb.auth.signInWithPassword({ email: em(), password: pw() })); await iniciar(); });
   $('#pw').onkeydown = e => { if (e.key === 'Enter') $('#in').click(); };
